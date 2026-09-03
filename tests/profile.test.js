@@ -1,0 +1,39 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { ProfileService, validateProfile } from '../src/profile/index.js';
+
+test('normalizes and validates profile input', async () => {
+  const service = new ProfileService();
+  const profile = await service.create({
+    id: 'profile-1',
+    displayName: '  Charles  ',
+    contact: { email: 'USER@Example.COM ' },
+    timezone: 'America/New_York',
+    locale: 'en-US',
+    avatarUrl: 'https://example.com/avatar.png'
+  });
+
+  assert.equal(profile.displayName, 'Charles');
+  assert.equal(profile.contact.email, 'user@example.com');
+  assert.equal(profile.status, 'active');
+  assert.deepEqual(validateProfile(profile), []);
+});
+
+test('supports CRUD profile service behavior', async () => {
+  const service = new ProfileService();
+  await service.create({ id: 'profile-2', displayName: 'Traveler', contact: { email: 'traveler@example.com' } });
+
+  assert.equal((await service.get('profile-2')).displayName, 'Traveler');
+  assert.equal((await service.update('profile-2', { preferences: { units: 'metric' } })).preferences.units, 'metric');
+  assert.equal((await service.list()).length, 1);
+  assert.equal(await service.delete('profile-2'), true);
+  await assert.rejects(() => service.get('profile-2'), /Profile was not found/);
+});
+
+test('rejects invalid profile data with structured details', async () => {
+  const service = new ProfileService();
+  await assert.rejects(
+    () => service.create({ displayName: 'A', contact: { email: 'bad-email' }, avatarUrl: 'ftp://example.com/avatar.png' }),
+    (error) => error.code === 'PROFILE_VALIDATION_FAILED' && error.details.length === 3
+  );
+});
