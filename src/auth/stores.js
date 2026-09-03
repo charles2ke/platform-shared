@@ -1,8 +1,18 @@
 export class InMemoryAccountStore {
   #accounts = new Map();
+  #accountIdsByEmail = new Map();
 
   async upsert(account) {
-    this.#accounts.set(account.id, { ...account });
+    const existing = this.#accounts.get(account.id);
+    if (existing?.email) {
+      this.#accountIdsByEmail.delete(existing.email.toLowerCase());
+    }
+
+    const storedAccount = { ...account };
+    this.#accounts.set(account.id, storedAccount);
+    if (storedAccount.email) {
+      this.#accountIdsByEmail.set(storedAccount.email.toLowerCase(), account.id);
+    }
     return this.findById(account.id);
   }
 
@@ -13,11 +23,7 @@ export class InMemoryAccountStore {
 
   async findByEmail(email) {
     const normalized = email?.toLowerCase();
-    for (const account of this.#accounts.values()) {
-      if (account.email?.toLowerCase() === normalized) {
-        return { ...account };
-      }
-    }
-    return undefined;
+    const accountId = this.#accountIdsByEmail.get(normalized);
+    return accountId ? this.findById(accountId) : undefined;
   }
 }

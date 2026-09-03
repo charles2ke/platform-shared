@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createAuthGuard, getBearerToken, issueToken, issueTokenPair, protect, refreshAccessToken, verifyToken } from '../src/auth/index.js';
+import { createAuthGuard, getBearerToken, InMemoryAccountStore, issueToken, issueTokenPair, protect, refreshAccessToken, verifyToken } from '../src/auth/index.js';
 
 const secret = 'test-secret-that-is-long-enough-for-hmac';
 
@@ -54,4 +54,11 @@ test('guard authenticates bearer tokens and enforces RBAC', async () => {
 
 test('treats empty bearer token headers as missing', () => {
   assert.equal(getBearerToken({ headers: { authorization: 'Bearer ' } }), undefined);
+});
+
+test('looks up in-memory accounts by normalized email', async () => {
+  const store = new InMemoryAccountStore();
+  await store.upsert({ id: 'account-1', email: 'User@Example.COM' });
+
+  assert.equal((await store.findByEmail('user@example.com')).id, 'account-1');
 });

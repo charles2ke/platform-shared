@@ -11,8 +11,9 @@ export class InMemoryProfileStore {
     if (this.#profiles.has(profile.id)) {
       throw createError('PROFILE_ALREADY_EXISTS', 'Profile already exists', { status: 409, details: { id: profile.id } });
     }
-    this.#profiles.set(profile.id, clone(profile));
-    return clone(profile);
+    const storedProfile = clone(profile);
+    this.#profiles.set(profile.id, storedProfile);
+    return clone(storedProfile);
   }
 
   async get(id) {
