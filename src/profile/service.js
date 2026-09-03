@@ -25,7 +25,15 @@ export class ProfileService {
 
   async update(id, updates) {
     const existing = await this.get(id);
-    const profile = normalizeProfile({ ...existing, ...updates, contact: { ...existing.contact, ...updates.contact }, preferences: { ...existing.preferences, ...updates.preferences }, metadata: { ...existing.metadata, ...updates.metadata }, id }, this.defaults);
+    const merged = {
+      ...existing,
+      ...updates,
+      contact: { ...existing.contact, ...updates.contact },
+      preferences: { ...existing.preferences, ...updates.preferences },
+      metadata: { ...existing.metadata, ...updates.metadata },
+      id
+    };
+    const profile = normalizeProfile(merged, this.defaults);
     assertValidProfile(profile);
     return this.store.update(id, profile);
   }

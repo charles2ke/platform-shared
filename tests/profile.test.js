@@ -50,7 +50,11 @@ test('rejects invalid profile data with structured details', async () => {
   const service = new ProfileService();
   await assert.rejects(
     () => service.create({ displayName: 'A', contact: { email: 'bad-email' }, avatarUrl: 'ftp://example.com/avatar.png' }),
-    (error) => error.code === 'PROFILE_VALIDATION_FAILED' && error.details.length === 3
+    (error) => {
+      assert.equal(error.code, 'PROFILE_VALIDATION_FAILED');
+      assert.deepEqual(error.details.map((detail) => detail.field).sort(), ['avatarUrl', 'contact.email', 'displayName']);
+      return true;
+    }
   );
 });
 

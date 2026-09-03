@@ -37,7 +37,7 @@ export function issueToken({ subject, roles = [], permissions = [], claims = {},
   }
 
   const iat = secondsNow(now);
-  const payload = {
+  const payload = Object.fromEntries(Object.entries({
     ...claims,
     sub: subject,
     roles: [...new Set(roles)],
@@ -48,9 +48,7 @@ export function issueToken({ subject, roles = [], permissions = [], claims = {},
     exp: iat + ttlSeconds,
     jti: claims.jti ?? randomUUID(),
     token_use: tokenUse
-  };
-
-  Object.keys(payload).forEach((key) => payload[key] === undefined && delete payload[key]);
+  }).filter(([, value]) => value !== undefined));
 
   const encodedHeader = base64UrlEncode({ alg: 'HS256', typ: 'JWT' });
   const encodedPayload = base64UrlEncode(payload);
