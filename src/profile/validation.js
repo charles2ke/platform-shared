@@ -3,7 +3,11 @@ import { createError } from '../shared/errors.js';
 export const PROFILE_STATUSES = Object.freeze(['active', 'inactive', 'suspended', 'deleted']);
 
 function normalizeString(value) {
-  return typeof value === 'string' ? value.trim() : value;
+  if (typeof value !== 'string') {
+    return value;
+  }
+  const trimmed = value.trim();
+  return trimmed === '' ? undefined : trimmed;
 }
 
 export function normalizeProfile(input = {}, defaults = {}) {

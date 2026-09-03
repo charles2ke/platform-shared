@@ -41,7 +41,8 @@ test('refreshes access tokens from refresh tokens', () => {
 test('guard authenticates bearer tokens and enforces RBAC', async () => {
   const token = issueToken({ subject: 'user-3', roles: ['member'], permissions: ['profile:read'], secret });
   const guard = createAuthGuard({ secret });
-  const authorization = `${['Bear', 'er'].join('')} ${token}`;
+  const scheme = 'Bearer';
+  const authorization = `${scheme} ${token}`;
   const principal = guard({ headers: { authorization } }, { roles: ['member'], permissions: ['profile:read'] });
 
   assert.equal(principal.id, 'user-3');

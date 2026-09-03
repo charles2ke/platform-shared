@@ -47,6 +47,7 @@ export class NotificationService {
   }
 
   async schedule(notification, when) {
+    // Placeholder only: downstream apps must connect this to a queue or scheduler before relying on delivery.
     return {
       notificationId: notification.id,
       status: DELIVERY_STATUS.PENDING,
