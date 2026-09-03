@@ -4,6 +4,13 @@ import { createAuthGuard, getBearerToken, InMemoryAccountStore, issueToken, issu
 
 const secret = 'test-secret-that-is-long-enough-for-hmac';
 
+test('rejects JWT secrets shorter than 32 characters', () => {
+  assert.throws(
+    () => issueToken({ subject: 'user-1', secret: 'a'.repeat(31) }),
+    /JWT secret is required/
+  );
+});
+
 test('issues and verifies JWT access tokens', () => {
   const now = new Date('2026-01-01T00:00:00Z');
   const token = issueToken({

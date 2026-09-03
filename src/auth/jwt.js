@@ -21,7 +21,7 @@ function sign(input, secret) {
 }
 
 function assertSecret(secret) {
-  if (!secret || typeof secret !== 'string') {
+  if (!secret || typeof secret !== 'string' || secret.length < 32) {
     throw createError('AUTH_MISSING_SECRET', 'A JWT secret is required', { status: 500 });
   }
 }
