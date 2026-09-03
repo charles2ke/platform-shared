@@ -1,0 +1,22 @@
+{
+  "name": "@charles2ke/platform-shared",
+  "version": "0.1.0",
+  "description": "Shared platform foundations for auth, profiles, and notifications.",
+  "type": "module",
+  "main": "./src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./auth": "./src/auth/index.js",
+    "./profile": "./src/profile/index.js",
+    "./notifications": "./src/notifications/index.js",
+    "./shared": "./src/shared/index.js"
+  },
+  "scripts": {
+    "build": "node scripts/check-syntax.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT"
+}
