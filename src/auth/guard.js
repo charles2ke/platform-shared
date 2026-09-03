@@ -10,7 +10,13 @@ export function getBearerToken(request) {
     return undefined;
   }
 
-  const [scheme, token] = authorization.split(' ');
+  const separatorIndex = authorization.indexOf(' ');
+  if (separatorIndex === -1) {
+    return undefined;
+  }
+
+  const scheme = authorization.slice(0, separatorIndex);
+  const token = authorization.slice(separatorIndex + 1);
   return /^Bearer$/i.test(scheme) ? token : undefined;
 }
 

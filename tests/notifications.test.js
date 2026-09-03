@@ -41,3 +41,13 @@ test('returns partial failure details without hiding successful deliveries', asy
   assert.equal(result.deliveries.find((delivery) => delivery.channel === CHANNELS.EMAIL).status, DELIVERY_STATUS.SENT);
   assert.equal(result.deliveries.find((delivery) => delivery.channel === CHANNELS.SMS).error.code, 'NOTIFICATION_DELIVERY_FAILED');
 });
+
+test('returns placeholder schedule status for future delivery integration', async () => {
+  const service = new NotificationService();
+  const scheduled = await service.schedule({ id: 'notification-3', body: 'Later' }, new Date('2026-01-01T00:00:00Z'));
+
+  assert.equal(scheduled.notificationId, 'notification-3');
+  assert.equal(scheduled.status, DELIVERY_STATUS.PENDING);
+  assert.equal(scheduled.scheduledFor, '2026-01-01T00:00:00.000Z');
+  assert.equal(scheduled.notification.body, 'Later');
+});

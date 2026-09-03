@@ -30,6 +30,16 @@ test('supports CRUD profile service behavior', async () => {
   await assert.rejects(() => service.get('profile-2'), /Profile was not found/);
 });
 
+test('rejects duplicate profile IDs with a structured error', async () => {
+  const service = new ProfileService();
+  await service.create({ id: 'profile-3', displayName: 'Duplicate', contact: { email: 'duplicate@example.com' } });
+
+  await assert.rejects(
+    () => service.create({ id: 'profile-3', displayName: 'Duplicate', contact: { email: 'duplicate@example.com' } }),
+    (error) => error.code === 'PROFILE_ALREADY_EXISTS' && error.status === 409
+  );
+});
+
 test('rejects invalid profile data with structured details', async () => {
   const service = new ProfileService();
   await assert.rejects(

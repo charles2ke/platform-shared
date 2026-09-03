@@ -1,3 +1,5 @@
+import { createError } from '../shared/errors.js';
+
 function clone(value) {
   return value ? structuredClone(value) : value;
 }
@@ -7,7 +9,7 @@ export class InMemoryProfileStore {
 
   async create(profile) {
     if (this.#profiles.has(profile.id)) {
-      throw new Error(`Profile ${profile.id} already exists`);
+      throw createError('PROFILE_ALREADY_EXISTS', 'Profile already exists', { status: 409, details: { id: profile.id } });
     }
     this.#profiles.set(profile.id, clone(profile));
     return clone(profile);
