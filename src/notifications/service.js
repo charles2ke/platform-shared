@@ -10,7 +10,16 @@ export class NotificationService {
   }
 
   async send(notification) {
-    const channels = notification.channels ?? [notification.channel].filter(Boolean);
+    let channels;
+    if (notification.channels === undefined) {
+      channels = [notification.channel].filter(Boolean);
+    } else if (typeof notification.channels === 'string') {
+      channels = [notification.channels];
+    } else if (Array.isArray(notification.channels)) {
+      channels = notification.channels;
+    } else {
+      throw createError('NOTIFICATION_INVALID_CHANNELS', 'Notification channels must be a string or an array', { status: 400 });
+    }
     if (channels.length === 0) {
       throw createError('NOTIFICATION_CHANNEL_REQUIRED', 'At least one notification channel is required', { status: 400 });
     }

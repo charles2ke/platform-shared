@@ -25,6 +25,19 @@ test('routes notifications to channel adapters', async () => {
   assert.equal(push.deliveries.length, 1);
 });
 
+test('accepts a string channel and rejects invalid channel input', async () => {
+  const email = new MockChannelAdapter({ channel: CHANNELS.EMAIL });
+  const service = new NotificationService({ adapters: { email } });
+
+  const result = await service.send({ id: 'notification-string-channel', channels: CHANNELS.EMAIL, body: 'Hello' });
+
+  assert.equal(result.status, DELIVERY_STATUS.SENT);
+  await assert.rejects(
+    () => service.send({ id: 'notification-invalid-channels', channels: {} }),
+    (error) => error.code === 'NOTIFICATION_INVALID_CHANNELS' && error.status === 400
+  );
+});
+
 test('returns partial failure details without hiding successful deliveries', async () => {
   const email = new MockChannelAdapter({ channel: CHANNELS.EMAIL });
   const sms = new MockChannelAdapter({ channel: CHANNELS.SMS, fail: true });

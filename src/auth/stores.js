@@ -4,14 +4,16 @@ export class InMemoryAccountStore {
 
   async upsert(account) {
     const existing = this.#accounts.get(account.id);
-    if (existing?.email) {
-      this.#accountIdsByEmail.delete(existing.email.toLowerCase());
+    const existingEmail = normalizeEmail(existing?.email);
+    if (existingEmail) {
+      this.#accountIdsByEmail.delete(existingEmail);
     }
 
     const storedAccount = { ...account };
     this.#accounts.set(account.id, storedAccount);
-    if (storedAccount.email) {
-      this.#accountIdsByEmail.set(storedAccount.email.toLowerCase(), account.id);
+    const storedEmail = normalizeEmail(storedAccount.email);
+    if (storedEmail) {
+      this.#accountIdsByEmail.set(storedEmail, account.id);
     }
     return this.findById(account.id);
   }
@@ -22,8 +24,12 @@ export class InMemoryAccountStore {
   }
 
   async findByEmail(email) {
-    const normalized = email?.toLowerCase();
+    const normalized = normalizeEmail(email);
     const accountId = this.#accountIdsByEmail.get(normalized);
     return accountId ? this.findById(accountId) : undefined;
   }
+}
+
+function normalizeEmail(email) {
+  return typeof email === 'string' ? email.toLowerCase() : undefined;
 }

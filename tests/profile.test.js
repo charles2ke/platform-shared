@@ -64,6 +64,14 @@ test('validates profile id presence', () => {
   assert.equal(errors.find((error) => error.field === 'id')?.message, 'Profile id is required');
 });
 
+test('rejects non-string profile IDs', () => {
+  for (const id of [1, {}]) {
+    const errors = validateProfile(normalizeProfile({ id, displayName: 'Invalid ID' }));
+
+    assert.equal(errors.find((error) => error.field === 'id')?.message, 'Profile id is required');
+  }
+});
+
 test('validates malformed email input without complex regular expressions', () => {
   const profile = normalizeProfile({
     id: 'profile-bad-email',

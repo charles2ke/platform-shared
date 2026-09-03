@@ -50,7 +50,7 @@ export function normalizeProfile(input = {}, defaults = {}) {
 
 export function validateProfile(profile) {
   const errors = [];
-  if (!profile.id) {
+  if (typeof profile.id !== 'string' || !profile.id) {
     errors.push({ field: 'id', message: 'Profile id is required' });
   }
   if (!profile.displayName || profile.displayName.length < 2) {

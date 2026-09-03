@@ -69,3 +69,12 @@ test('looks up in-memory accounts by normalized email', async () => {
 
   assert.equal((await store.findByEmail('user@example.com')).id, 'account-1');
 });
+
+test('ignores non-string emails when indexing accounts', async () => {
+  const store = new InMemoryAccountStore();
+  await store.upsert({ id: 'account-1', email: {} });
+  await store.upsert({ id: 'account-1', email: 'user@example.com' });
+
+  assert.equal((await store.findByEmail('USER@EXAMPLE.COM')).id, 'account-1');
+  assert.equal(await store.findByEmail({}), undefined);
+});
