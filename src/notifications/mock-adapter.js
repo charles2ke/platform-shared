@@ -10,7 +10,7 @@ export class ChannelAdapter {
     this.channel = channel;
   }
 
-  async send() {
+  async send(message) {
     throw createError('NOTIFICATION_ADAPTER_NOT_IMPLEMENTED', `ChannelAdapter.send() must be implemented for ${this.channel ?? 'unknown'}`, { status: 500 });
   }
 }

@@ -13,19 +13,19 @@ function notImplemented(method) {
  * provide an object with the same methods) to plug their own persistence layer.
  */
 export class ProfileStore {
-  async create() {
+  async create(profile) {
     return notImplemented('create');
   }
 
-  async get() {
+  async get(id) {
     return notImplemented('get');
   }
 
-  async update() {
+  async update(id, profile) {
     return notImplemented('update');
   }
 
-  async delete() {
+  async delete(id) {
     return notImplemented('delete');
   }
 
