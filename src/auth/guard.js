@@ -16,7 +16,7 @@ export function getBearerToken(request) {
   }
 
   const scheme = authorization.slice(0, separatorIndex);
-  const token = authorization.slice(separatorIndex + 1);
+  const token = authorization.slice(separatorIndex + 1).trim();
   return /^Bearer$/i.test(scheme) ? token : undefined;
 }
 

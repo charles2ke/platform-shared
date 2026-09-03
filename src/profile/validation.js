@@ -31,6 +31,9 @@ export function normalizeProfile(input = {}, defaults = {}) {
 
 export function validateProfile(profile) {
   const errors = [];
+  if (!profile.id) {
+    errors.push({ field: 'id', message: 'Profile id is required' });
+  }
   if (!profile.displayName || profile.displayName.length < 2) {
     errors.push({ field: 'displayName', message: 'Display name must be at least 2 characters' });
   }

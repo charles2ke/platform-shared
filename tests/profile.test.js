@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { ProfileService, validateProfile } from '../src/profile/index.js';
+import { ProfileService, normalizeProfile, validateProfile } from '../src/profile/index.js';
 
 test('normalizes and validates profile input', async () => {
   const service = new ProfileService();
@@ -46,4 +46,10 @@ test('rejects invalid profile data with structured details', async () => {
     () => service.create({ displayName: 'A', contact: { email: 'bad-email' }, avatarUrl: 'ftp://example.com/avatar.png' }),
     (error) => error.code === 'PROFILE_VALIDATION_FAILED' && error.details.length === 3
   );
+});
+
+test('validates profile id presence', () => {
+  const errors = validateProfile(normalizeProfile({ displayName: 'Missing Id' }));
+
+  assert.equal(errors.find((error) => error.field === 'id')?.message, 'Profile id is required');
 });
