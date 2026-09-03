@@ -9,15 +9,15 @@ function notImplemented(method) {
  * provide an object with the same methods) to plug their own persistence layer.
  */
 export class AccountStore {
-  async upsert() {
+  async upsert(account) {
     return notImplemented('upsert');
   }
 
-  async findById() {
+  async findById(id) {
     return notImplemented('findById');
   }
 
-  async findByEmail() {
+  async findByEmail(email) {
     return notImplemented('findByEmail');
   }
 }
