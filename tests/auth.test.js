@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createAuthGuard, issueToken, issueTokenPair, protect, refreshAccessToken, verifyToken } from '../src/auth/index.js';
+import { createAuthGuard, getBearerToken, issueToken, issueTokenPair, protect, refreshAccessToken, verifyToken } from '../src/auth/index.js';
 
 const secret = 'test-secret-that-is-long-enough-for-hmac';
 
@@ -50,4 +50,8 @@ test('guard authenticates bearer tokens and enforces RBAC', async () => {
   const handler = protect((_request, context) => context.principal.id, guard, { permissions: ['profile:read'] });
   assert.equal(await handler({ headers: { authorization } }), 'user-3');
   assert.throws(() => guard({ headers: { authorization } }, { permissions: ['admin:write'] }), /required access/);
+});
+
+test('treats empty bearer token headers as missing', () => {
+  assert.equal(getBearerToken({ headers: { authorization: 'Bearer ' } }), undefined);
 });

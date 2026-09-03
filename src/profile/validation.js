@@ -17,7 +17,7 @@ export function normalizeProfile(input = {}, defaults = {}) {
     id: normalizeString(input.id),
     displayName: normalizeString(input.displayName),
     contact: {
-      email: typeof contact.email === 'string' ? contact.email.trim().toLowerCase() : contact.email,
+      email: typeof contact.email === 'string' ? normalizeString(contact.email)?.toLowerCase() : contact.email,
       phone: normalizeString(contact.phone)
     },
     preferences: { ...preferences },

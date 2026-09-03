@@ -19,6 +19,12 @@ test('normalizes and validates profile input', async () => {
   assert.deepEqual(validateProfile(profile), []);
 });
 
+test('normalizes empty optional profile contact fields to undefined', () => {
+  const profile = normalizeProfile({ id: 'profile-empty-contact', displayName: 'Empty Contact', contact: { email: '   ' } });
+
+  assert.equal(profile.contact.email, undefined);
+});
+
 test('supports CRUD profile service behavior', async () => {
   const service = new ProfileService();
   await service.create({ id: 'profile-2', displayName: 'Traveler', contact: { email: 'traveler@example.com' } });
