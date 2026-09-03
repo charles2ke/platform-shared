@@ -63,3 +63,13 @@ test('validates profile id presence', () => {
 
   assert.equal(errors.find((error) => error.field === 'id')?.message, 'Profile id is required');
 });
+
+test('validates malformed email input without complex regular expressions', () => {
+  const profile = normalizeProfile({
+    id: 'profile-bad-email',
+    displayName: 'Bad Email',
+    contact: { email: `${'!.'.repeat(500)}@example.com` }
+  });
+
+  assert.equal(validateProfile(profile).find((error) => error.field === 'contact.email')?.message, 'Email address is invalid');
+});

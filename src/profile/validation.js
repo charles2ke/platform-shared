@@ -10,6 +10,25 @@ function normalizeString(value) {
   return trimmed === '' ? undefined : trimmed;
 }
 
+function isValidEmail(value) {
+  if (typeof value !== 'string' || value.length > 320) {
+    return false;
+  }
+
+  if (value !== value.trim() || [' ', '\t', '\n', '\r'].some((character) => value.includes(character))) {
+    return false;
+  }
+
+  const atIndex = value.indexOf('@');
+  if (atIndex <= 0 || atIndex !== value.lastIndexOf('@')) {
+    return false;
+  }
+
+  const domain = value.slice(atIndex + 1);
+  const lastDotIndex = domain.lastIndexOf('.');
+  return lastDotIndex > 0 && lastDotIndex < domain.length - 1 && domain.split('.').every(Boolean);
+}
+
 export function normalizeProfile(input = {}, defaults = {}) {
   const contact = input.contact ?? {};
   const preferences = input.preferences ?? {};
@@ -37,7 +56,7 @@ export function validateProfile(profile) {
   if (!profile.displayName || profile.displayName.length < 2) {
     errors.push({ field: 'displayName', message: 'Display name must be at least 2 characters' });
   }
-  if (profile.contact?.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(profile.contact.email)) {
+  if (profile.contact?.email && !isValidEmail(profile.contact.email)) {
     errors.push({ field: 'contact.email', message: 'Email address is invalid' });
   }
   if (profile.avatarUrl) {
