@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { ProfileService, normalizeProfile, validateProfile } from '../src/profile/index.js';
+import { InMemoryProfileStore, ProfileService, ProfileStore, normalizeProfile, validateProfile } from '../src/profile/index.js';
 
 test('normalizes and validates profile input', async () => {
   const service = new ProfileService();
@@ -80,4 +80,17 @@ test('validates malformed email input without complex regular expressions', () =
   });
 
   assert.equal(validateProfile(profile).find((error) => error.field === 'contact.email')?.message, 'Email address is invalid');
+});
+
+test('exposes a profile store contract that requires implementations', async () => {
+  const store = new ProfileStore();
+  assert.ok(new InMemoryProfileStore() instanceof ProfileStore);
+  await assert.rejects(() => store.get('profile-1'), { code: 'PROFILE_STORE_NOT_IMPLEMENTED' });
+});
+
+test('updates a profile when no update payload is provided', async () => {
+  const service = new ProfileService();
+  const created = await service.create({ id: 'profile-noop', displayName: 'Charles' });
+  const updated = await service.update('profile-noop');
+  assert.deepEqual(updated, created);
 });

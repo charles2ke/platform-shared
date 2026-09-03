@@ -22,13 +22,13 @@ examples/          Integration stubs for social, travel, workout, and basa
 - Issues and verifies HMAC SHA-256 JWT access and refresh tokens.
 - Provides `createAuthGuard()` and `protect()` helpers for framework-specific route wrappers.
 - Includes RBAC scaffolding with role and permission checks.
-- Includes an in-memory account store shape that can be replaced by persistent adapters later.
+- Exposes an `AccountStore` interface plus an `InMemoryAccountStore` default that can be replaced by persistent adapters later.
 
 ### Profile
 
 - Uses a canonical profile shape: `id`, `displayName`, `contact`, `preferences`, `timezone`, `locale`, `avatarUrl`, `status`, and `metadata`.
 - Normalizes display names, email addresses, locale/timezone defaults, and status.
-- Provides validation helpers and `ProfileService` over a replaceable store interface.
+- Provides validation helpers and `ProfileService` over the replaceable `ProfileStore` interface.
 - Ships `InMemoryProfileStore` for tests, prototypes, and local development.
 
 ### Notifications
@@ -37,7 +37,7 @@ examples/          Integration stubs for social, travel, workout, and basa
 - Supports email, SMS, and push channel abstraction.
 - Renders `{{variable}}` template placeholders from provided variables.
 - Returns delivery status objects with `sent`, `failed`, `partial`, or `pending` states.
-- Ships `MockChannelAdapter` for default/local provider behavior.
+- Defines a `ChannelAdapter` interface and ships `MockChannelAdapter` for default/local provider behavior.
 
 ### Shared
 
@@ -101,6 +101,27 @@ const profile = await profiles.create({
 });
 ```
 
+### Plug in persistent stores and providers
+
+```js
+import { ProfileStore } from '@charles2ke/platform-shared/profile';
+import { ChannelAdapter } from '@charles2ke/platform-shared/notifications';
+
+class SqlProfileStore extends ProfileStore {
+  async create(profile) { /* app-owned persistence */ }
+  async get(id) { /* ... */ }
+  async update(id, profile) { /* ... */ }
+  async delete(id) { /* ... */ }
+  async list() { /* ... */ }
+}
+
+class EmailProviderAdapter extends ChannelAdapter {
+  async send(message) { /* call provider, return a delivery status object */ }
+}
+```
+
+Unimplemented interface methods throw structured `PlatformError`s instead of failing silently.
+
 ### Send notifications
 
 ```js
@@ -127,7 +148,7 @@ await notifications.send({
 1. Install or vendor this package in the consuming app.
 2. Load app-specific env vars with `loadConfig()` or the app's existing config layer.
 3. Wrap `createAuthGuard()` in the app's router middleware layer.
-4. Replace in-memory stores/adapters with app-owned persistence and provider adapters.
+4. Replace in-memory stores/adapters with app-owned persistence and provider adapters by extending `AccountStore`, `ProfileStore`, or `ChannelAdapter` (or supplying objects with the same methods).
 5. Keep domain-specific behavior in the app; keep shared identity/profile/notification contracts here.
 
 See `examples/social.js`, `examples/travel.js`, `examples/workout.js`, and `examples/basa.js` for starting points.

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createAuthGuard, getBearerToken, InMemoryAccountStore, issueToken, issueTokenPair, protect, refreshAccessToken, verifyToken } from '../src/auth/index.js';
+import { AccountStore, createAuthGuard, getBearerToken, InMemoryAccountStore, issueToken, issueTokenPair, protect, refreshAccessToken, verifyToken } from '../src/auth/index.js';
 
 const secret = 'test-secret-that-is-long-enough-for-hmac';
 
@@ -77,4 +77,10 @@ test('ignores non-string emails when indexing accounts', async () => {
 
   assert.equal((await store.findByEmail('USER@EXAMPLE.COM')).id, 'account-1');
   assert.equal(await store.findByEmail({}), undefined);
+});
+
+test('exposes an account store contract that requires implementations', async () => {
+  const store = new AccountStore();
+  assert.ok(new InMemoryAccountStore() instanceof AccountStore);
+  await assert.rejects(() => store.findById('user-1'), { code: 'AUTH_STORE_NOT_IMPLEMENTED' });
 });

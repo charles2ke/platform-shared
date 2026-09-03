@@ -1,8 +1,23 @@
+import { createError } from '../shared/errors.js';
 import { DELIVERY_STATUS } from './types.js';
 
-export class MockChannelAdapter {
-  constructor({ channel, fail = false } = {}) {
+/**
+ * Contract for notification channel adapters. Downstream apps extend this class
+ * (or provide an object with a `send()` method) to plug real providers in.
+ */
+export class ChannelAdapter {
+  constructor({ channel } = {}) {
     this.channel = channel;
+  }
+
+  async send(message) {
+    throw createError('NOTIFICATION_ADAPTER_NOT_IMPLEMENTED', `ChannelAdapter.send() must be implemented for ${this.channel ?? 'unknown'}`, { status: 500 });
+  }
+}
+
+export class MockChannelAdapter extends ChannelAdapter {
+  constructor({ channel, fail = false } = {}) {
+    super({ channel });
     this.fail = fail;
     this.deliveries = [];
   }

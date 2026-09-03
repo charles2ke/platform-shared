@@ -1,4 +1,28 @@
-export class InMemoryAccountStore {
+import { createError } from '../shared/errors.js';
+
+function notImplemented(method) {
+  throw createError('AUTH_STORE_NOT_IMPLEMENTED', `AccountStore.${method}() must be implemented`, { status: 500 });
+}
+
+/**
+ * Contract for persistent account stores. Downstream apps extend this class (or
+ * provide an object with the same methods) to plug their own persistence layer.
+ */
+export class AccountStore {
+  async upsert(account) {
+    return notImplemented('upsert');
+  }
+
+  async findById(id) {
+    return notImplemented('findById');
+  }
+
+  async findByEmail(email) {
+    return notImplemented('findByEmail');
+  }
+}
+
+export class InMemoryAccountStore extends AccountStore {
   #accounts = new Map();
   #accountIdsByEmail = new Map();
 
