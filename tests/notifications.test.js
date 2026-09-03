@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { CHANNELS, DELIVERY_STATUS, MockChannelAdapter, NotificationService, renderTemplate } from '../src/notifications/index.js';
+import { CHANNELS, ChannelAdapter, DELIVERY_STATUS, MockChannelAdapter, NotificationService, renderTemplate } from '../src/notifications/index.js';
 
 test('renders notification template variables', () => {
   assert.equal(renderTemplate('Hello {{ user.name }}', { user: { name: 'Charles' } }), 'Hello Charles');
@@ -63,4 +63,10 @@ test('returns placeholder schedule status for future delivery integration', asyn
   assert.equal(scheduled.status, DELIVERY_STATUS.PENDING);
   assert.equal(scheduled.scheduledFor, '2026-01-01T00:00:00.000Z');
   assert.equal(scheduled.notification.body, 'Later');
+});
+
+test('exposes a channel adapter contract that requires implementations', async () => {
+  const adapter = new ChannelAdapter({ channel: CHANNELS.SMS });
+  assert.ok(new MockChannelAdapter({ channel: CHANNELS.SMS }) instanceof ChannelAdapter);
+  await assert.rejects(() => adapter.send({ body: 'hi' }), { code: 'NOTIFICATION_ADAPTER_NOT_IMPLEMENTED' });
 });

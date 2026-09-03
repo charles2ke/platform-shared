@@ -4,7 +4,37 @@ function clone(value) {
   return value ? structuredClone(value) : value;
 }
 
-export class InMemoryProfileStore {
+function notImplemented(method) {
+  throw createError('PROFILE_STORE_NOT_IMPLEMENTED', `ProfileStore.${method}() must be implemented`, { status: 500 });
+}
+
+/**
+ * Contract for persistent profile stores. Downstream apps extend this class (or
+ * provide an object with the same methods) to plug their own persistence layer.
+ */
+export class ProfileStore {
+  async create() {
+    return notImplemented('create');
+  }
+
+  async get() {
+    return notImplemented('get');
+  }
+
+  async update() {
+    return notImplemented('update');
+  }
+
+  async delete() {
+    return notImplemented('delete');
+  }
+
+  async list() {
+    return notImplemented('list');
+  }
+}
+
+export class InMemoryProfileStore extends ProfileStore {
   #profiles = new Map();
 
   async create(profile) {

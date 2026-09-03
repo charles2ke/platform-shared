@@ -23,7 +23,7 @@ export class ProfileService {
     return profile;
   }
 
-  async update(id, updates) {
+  async update(id, updates = {}) {
     const existing = await this.get(id);
     const merged = {
       ...existing,
