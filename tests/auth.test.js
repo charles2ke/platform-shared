@@ -59,6 +59,24 @@ test('guard authenticates bearer tokens and enforces RBAC', async () => {
   assert.throws(() => guard({ headers: { authorization } }, { permissions: ['admin:write'] }), /required access/);
 });
 
+test('supports wildcard permission checks and string requirements in RBAC', () => {
+  const token = issueToken({
+    subject: 'user-wildcard',
+    roles: ['member'],
+    permissions: ['profile:*', 'notifications:send'],
+    secret
+  });
+  const guard = createAuthGuard({ secret });
+  const authorization = 'Bearer ' + token;
+
+  const principal = guard({ headers: { authorization } }, { roles: 'member', permissions: 'profile:read' });
+  assert.equal(principal.id, 'user-wildcard');
+  assert.throws(
+    () => guard({ headers: { authorization } }, { permissions: ['profile:read', 'admin:write'], requireAllPermissions: true }),
+    /required access/
+  );
+});
+
 test('treats empty bearer token headers as missing', () => {
   assert.equal(getBearerToken({ headers: { authorization: 'Bearer ' } }), undefined);
 });
