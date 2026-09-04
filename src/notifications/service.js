@@ -68,33 +68,70 @@ export class NotificationService {
 
   async dispatchScheduled({ now = new Date() } = {}) {
     const nowDate = normalizeScheduleDate(now, { code: 'NOTIFICATION_INVALID_DISPATCH_TIME', message: 'Dispatch time must be a valid date value' });
-    const dueEntries = [];
-    const pendingEntries = [];
+    const dueEntries = await this.#loadDueEntries(nowDate);
+    const results = [];
 
-    for (const entry of this.#scheduled) {
-      if (new Date(entry.scheduledFor) <= nowDate) {
-        dueEntries.push(entry);
-      } else {
-        pendingEntries.push(entry);
+    for (const entry of dueEntries) {
+      try {
+        results.push({
+          notificationId: entry.notification.id,
+          scheduledFor: entry.scheduledFor,
+          delivery: await this.send(entry.notification)
+        });
+      } catch (error) {
+        const normalized = normalizeError(error, 'NOTIFICATION_DELIVERY_FAILED');
+        this.logger.warn('Scheduled notification delivery failed', { notificationId: entry.notification.id, error: normalized });
+        results.push({
+          notificationId: entry.notification.id,
+          scheduledFor: entry.scheduledFor,
+          delivery: {
+            notificationId: entry.notification.id,
+            status: DELIVERY_STATUS.FAILED,
+            deliveries: [{ status: DELIVERY_STATUS.FAILED, error: normalized.toJSON().error }]
+          }
+        });
       }
     }
 
-    this.#scheduled = pendingEntries;
-    const results = [];
-    for (const entry of dueEntries) {
-      results.push({
-        notificationId: entry.notification.id,
-        scheduledFor: entry.scheduledFor,
-        delivery: await this.send(entry.notification)
-      });
-    }
-
+    const pendingCount = this.scheduler?.countPending
+      ? await this.scheduler.countPending(nowDate)
+      : this.#scheduled.length;
+    const status = aggregateDispatchStatus(results);
     return {
-      status: DELIVERY_STATUS.PENDING,
+      status,
       processed: results.length,
-      pending: pendingEntries.length,
+      pending: pendingCount,
       results
     };
+  }
+
+  async #loadDueEntries(nowDate) {
+    if (!this.scheduler) {
+      const dueEntries = [];
+      const pendingEntries = [];
+
+      for (const entry of this.#scheduled) {
+        if (new Date(entry.scheduledFor) <= nowDate) {
+          dueEntries.push(entry);
+        } else {
+          pendingEntries.push(entry);
+        }
+      }
+
+      this.#scheduled = pendingEntries;
+      return dueEntries;
+    }
+
+    if (typeof this.scheduler.dequeueDue !== 'function') {
+      throw createError('NOTIFICATION_DISPATCH_NOT_SUPPORTED', 'Injected scheduler must implement dequeueDue() for dispatchScheduled()', { status: 500 });
+    }
+
+    const dueEntries = await this.scheduler.dequeueDue(nowDate);
+    if (!Array.isArray(dueEntries)) {
+      throw createError('NOTIFICATION_INVALID_SCHEDULER_RESPONSE', 'scheduler.dequeueDue() must return an array of scheduled entries', { status: 500 });
+    }
+
+    return dueEntries.map((entry) => normalizeScheduledEntry(entry));
   }
 }
 
@@ -127,4 +164,27 @@ function normalizeScheduleDate(value, { code = 'NOTIFICATION_INVALID_SCHEDULE_TI
   }
 
   return date;
+}
+
+function normalizeScheduledEntry(entry) {
+  const notification = entry?.notification ?? entry;
+  return {
+    notification,
+    scheduledFor: normalizeScheduleDate(entry?.scheduledFor ?? entry?.when ?? new Date()).toISOString()
+  };
+}
+
+function aggregateDispatchStatus(results) {
+  if (results.length === 0) {
+    return DELIVERY_STATUS.PENDING;
+  }
+
+  const statuses = results.map((result) => result.delivery?.status);
+  if (statuses.every((status) => status === DELIVERY_STATUS.SENT)) {
+    return DELIVERY_STATUS.SENT;
+  }
+  if (statuses.every((status) => status === DELIVERY_STATUS.FAILED)) {
+    return DELIVERY_STATUS.FAILED;
+  }
+  return DELIVERY_STATUS.PARTIAL;
 }

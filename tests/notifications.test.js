@@ -91,16 +91,26 @@ test('dispatches due scheduled notifications via in-memory workflow', async () =
   await service.schedule({ id: 'notification-5', channel: CHANNELS.EMAIL, body: 'Later' }, '2026-02-01T00:00:00.000Z');
 
   const firstDispatch = await service.dispatchScheduled({ now: '2026-01-15T00:00:00.000Z' });
+  assert.equal(firstDispatch.status, DELIVERY_STATUS.SENT);
   assert.equal(firstDispatch.processed, 1);
   assert.equal(firstDispatch.pending, 1);
   assert.equal(firstDispatch.results[0].notificationId, 'notification-4');
   assert.equal(firstDispatch.results[0].delivery.status, DELIVERY_STATUS.SENT);
 
   const secondDispatch = await service.dispatchScheduled({ now: '2026-03-01T00:00:00.000Z' });
+  assert.equal(secondDispatch.status, DELIVERY_STATUS.SENT);
   assert.equal(secondDispatch.processed, 1);
   assert.equal(secondDispatch.pending, 0);
   assert.equal(secondDispatch.results[0].notificationId, 'notification-5');
   assert.equal(email.deliveries.length, 2);
+});
+
+test('requires dequeueDue when dispatching with an injected scheduler', async () => {
+  const service = new NotificationService({ scheduler: { enqueue: async () => {}, countPending: async () => 0 } });
+  await assert.rejects(
+    () => service.dispatchScheduled({ now: '2026-01-15T00:00:00.000Z' }),
+    (error) => error.code === 'NOTIFICATION_DISPATCH_NOT_SUPPORTED' && error.status === 500
+  );
 });
 
 test('exposes a channel adapter contract that requires implementations', async () => {

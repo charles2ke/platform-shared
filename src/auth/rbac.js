@@ -39,7 +39,7 @@ function permissionMatches(grantedPermission, requiredPermission) {
   if (typeof grantedPermission !== 'string' || grantedPermission.length === 0) {
     return false;
   }
-  if (grantedPermission === '*' || requiredPermission === '*') {
+  if (grantedPermission === '*') {
     return true;
   }
   if (grantedPermission === requiredPermission) {
@@ -48,9 +48,6 @@ function permissionMatches(grantedPermission, requiredPermission) {
 
   if (grantedPermission.endsWith('*')) {
     return requiredPermission.startsWith(grantedPermission.slice(0, -1));
-  }
-  if (requiredPermission.endsWith('*')) {
-    return grantedPermission.startsWith(requiredPermission.slice(0, -1));
   }
 
   return false;
