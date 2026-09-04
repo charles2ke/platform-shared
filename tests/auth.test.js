@@ -76,6 +76,7 @@ test('supports wildcard permission checks and string requirements in RBAC', () =
     /required access/
   );
   assert.throws(() => guard({ headers: { authorization } }, { permissions: 'notifications:*' }), /required access/);
+  assert.throws(() => guard({ headers: { authorization } }, { permissions: 'profile:' }), /required access/);
 });
 
 test('treats empty bearer token headers as missing', () => {

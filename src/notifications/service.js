@@ -6,10 +6,18 @@ import { CHANNELS, DELIVERY_STATUS } from './types.js';
 export class NotificationService {
   #scheduled = [];
 
-  constructor({ adapters = {}, logger = noopLogger, scheduler } = {}) {
+  constructor({ adapters = {}, logger = noopLogger, scheduler, maxScheduleAttempts = 3, retryDelayMs = 60_000 } = {}) {
     this.adapters = adapters;
     this.logger = logger;
     this.scheduler = scheduler;
+    if (!Number.isInteger(maxScheduleAttempts) || maxScheduleAttempts < 1) {
+      throw createError('NOTIFICATION_INVALID_MAX_ATTEMPTS', 'maxScheduleAttempts must be a positive integer', { status: 500 });
+    }
+    if (!Number.isInteger(retryDelayMs) || retryDelayMs < 0) {
+      throw createError('NOTIFICATION_INVALID_RETRY_DELAY', 'retryDelayMs must be a non-negative integer', { status: 500 });
+    }
+    this.maxScheduleAttempts = maxScheduleAttempts;
+    this.retryDelayMs = retryDelayMs;
   }
 
   async send(notification) {
@@ -55,7 +63,7 @@ export class NotificationService {
     if (this.scheduler?.enqueue) {
       await this.scheduler.enqueue(notification, scheduledFor);
     } else {
-      this.#scheduled.push({ notification, scheduledFor: scheduledFor.toISOString() });
+      this.#scheduled.push({ notification, scheduledFor: scheduledFor.toISOString(), attempts: 0 });
     }
 
     return {
@@ -70,17 +78,23 @@ export class NotificationService {
     const nowDate = normalizeScheduleDate(now, { code: 'NOTIFICATION_INVALID_DISPATCH_TIME', message: 'Dispatch time must be a valid date value' });
     const dueEntries = await this.#loadDueEntries(nowDate);
     const results = [];
+    const retryEntries = [];
 
     for (const entry of dueEntries) {
       try {
+        const delivery = await this.send(entry.notification);
+        if (delivery.status === DELIVERY_STATUS.FAILED) {
+          await this.#queueRetry(entry, retryEntries, nowDate);
+        }
         results.push({
           notificationId: entry.notification.id,
           scheduledFor: entry.scheduledFor,
-          delivery: await this.send(entry.notification)
+          delivery
         });
       } catch (error) {
         const normalized = normalizeError(error, 'NOTIFICATION_DELIVERY_FAILED');
         this.logger.warn('Scheduled notification delivery failed', { notificationId: entry.notification.id, error: normalized });
+        await this.#queueRetry(entry, retryEntries, nowDate);
         results.push({
           notificationId: entry.notification.id,
           scheduledFor: entry.scheduledFor,
@@ -92,15 +106,20 @@ export class NotificationService {
         });
       }
     }
+    if (!this.scheduler && retryEntries.length > 0) {
+      this.#scheduled.push(...retryEntries);
+    }
 
-    const pendingCount = this.scheduler?.countPending
-      ? await this.scheduler.countPending(nowDate)
+    const pendingKnown = !this.scheduler || Boolean(this.scheduler.countPending);
+    const pendingCount = this.scheduler
+      ? (this.scheduler.countPending ? await this.scheduler.countPending(nowDate) : 0)
       : this.#scheduled.length;
     const status = aggregateDispatchStatus(results);
     return {
       status,
       processed: results.length,
       pending: pendingCount,
+      pendingKnown,
       results
     };
   }
@@ -133,6 +152,44 @@ export class NotificationService {
 
     return dueEntries.map((entry) => normalizeScheduledEntry(entry));
   }
+
+  async #queueRetry(entry, retryEntries, nowDate) {
+    const retryEntry = this.#buildRetryEntry(entry, nowDate);
+    if (!retryEntry) {
+      return;
+    }
+
+    if (!this.scheduler) {
+      retryEntries.push(retryEntry);
+      return;
+    }
+
+    if (typeof this.scheduler.requeue === 'function') {
+      await this.scheduler.requeue(retryEntry.notification, new Date(retryEntry.scheduledFor), retryEntry.attempts);
+      return;
+    }
+
+    this.logger.warn('Scheduled notification retry skipped because injected scheduler does not implement requeue()', {
+      notificationId: entry.notification?.id
+    });
+  }
+
+  #buildRetryEntry(entry, nowDate) {
+    const attempts = (entry.attempts ?? 0) + 1;
+    if (attempts >= this.maxScheduleAttempts) {
+      this.logger.warn('Scheduled notification retry limit reached', {
+        notificationId: entry.notification?.id,
+        maxScheduleAttempts: this.maxScheduleAttempts
+      });
+      return undefined;
+    }
+
+    return {
+      ...entry,
+      attempts,
+      scheduledFor: new Date(nowDate.getTime() + this.retryDelayMs).toISOString()
+    };
+  }
 }
 
 function normalizeChannels(notification) {
@@ -147,30 +204,46 @@ function normalizeChannels(notification) {
     throw createError('NOTIFICATION_INVALID_CHANNELS', 'Notification channels must be a string or an array', { status: 400 });
   }
 
-  const normalized = [...new Set(channels)];
-  for (const channel of normalized) {
+  for (const channel of channels) {
     if (typeof channel !== 'string' || !Object.values(CHANNELS).includes(channel)) {
       throw createError('NOTIFICATION_INVALID_CHANNEL', `Unsupported notification channel: ${String(channel)}`, { status: 400, details: { channel } });
     }
   }
 
-  return normalized;
+  return [...new Set(channels)];
 }
 
-function normalizeScheduleDate(value, { code = 'NOTIFICATION_INVALID_SCHEDULE_TIME', message = 'Scheduled notification time must be a valid date value' } = {}) {
+function normalizeScheduleDate(value, { code = 'NOTIFICATION_INVALID_SCHEDULE_TIME', message = 'Scheduled notification time must be a valid date value', status = 400 } = {}) {
   const date = value instanceof Date ? value : new Date(value);
   if (Number.isNaN(date.getTime())) {
-    throw createError(code, message, { status: 400 });
+    throw createError(code, message, { status });
   }
 
   return date;
 }
 
 function normalizeScheduledEntry(entry) {
-  const notification = entry?.notification ?? entry;
+  if (!entry || typeof entry !== 'object' || !Object.hasOwn(entry, 'notification')) {
+    throw createError('NOTIFICATION_INVALID_SCHEDULER_RESPONSE', 'Scheduled entries must be objects with notification and scheduledFor (or when)', { status: 500 });
+  }
+
+  const notification = entry.notification;
+  if (!notification || typeof notification !== 'object') {
+    throw createError('NOTIFICATION_INVALID_SCHEDULER_RESPONSE', 'Scheduled entry must include a notification object', { status: 500 });
+  }
+  const rawScheduledFor = entry?.scheduledFor ?? entry?.when;
+  if (rawScheduledFor === undefined) {
+    throw createError('NOTIFICATION_INVALID_SCHEDULER_RESPONSE', 'Scheduled entry must include scheduledFor or when', { status: 500 });
+  }
+
   return {
     notification,
-    scheduledFor: normalizeScheduleDate(entry?.scheduledFor ?? entry?.when ?? new Date()).toISOString()
+    scheduledFor: normalizeScheduleDate(rawScheduledFor, {
+      code: 'NOTIFICATION_INVALID_SCHEDULER_RESPONSE',
+      message: 'Scheduled entry time must be a valid date value',
+      status: 500
+    }).toISOString(),
+    attempts: Number.isInteger(entry?.attempts) && entry.attempts >= 0 ? entry.attempts : 0
   };
 }
 

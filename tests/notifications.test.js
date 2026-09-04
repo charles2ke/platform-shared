@@ -113,6 +113,84 @@ test('requires dequeueDue when dispatching with an injected scheduler', async ()
   );
 });
 
+test('dispatches scheduler-provided entries and uses scheduler retry hooks', async () => {
+  const sms = new MockChannelAdapter({ channel: CHANNELS.SMS, fail: true });
+  const requeueCalls = [];
+  const scheduler = {
+    async dequeueDue() {
+      return [{
+        notification: { id: 'notification-scheduler', channel: CHANNELS.SMS, body: 'Retry via scheduler' },
+        scheduledFor: '2026-01-01T00:00:00.000Z',
+        attempts: 0
+      }];
+    },
+    async countPending() {
+      return 7;
+    },
+    async requeue(notification, when, attempts) {
+      requeueCalls.push({ notification, when, attempts });
+    }
+  };
+  const service = new NotificationService({ adapters: { sms }, scheduler, retryDelayMs: 0 });
+
+  const result = await service.dispatchScheduled({ now: '2026-01-02T00:00:00.000Z' });
+  assert.equal(result.status, DELIVERY_STATUS.FAILED);
+  assert.equal(result.processed, 1);
+  assert.equal(result.pending, 7);
+  assert.equal(result.pendingKnown, true);
+  assert.equal(requeueCalls.length, 1);
+  assert.equal(requeueCalls[0].notification.id, 'notification-scheduler');
+  assert.equal(requeueCalls[0].attempts, 1);
+});
+
+test('rejects invalid scheduler entry shapes', async () => {
+  const scheduler = {
+    async dequeueDue() {
+      return [{ scheduledFor: '2026-01-01T00:00:00.000Z' }];
+    }
+  };
+  const service = new NotificationService({ scheduler });
+
+  await assert.rejects(
+    () => service.dispatchScheduled({ now: '2026-01-02T00:00:00.000Z' }),
+    (error) => error.code === 'NOTIFICATION_INVALID_SCHEDULER_RESPONSE' && error.status === 500
+  );
+});
+
+test('re-queues failed in-memory scheduled deliveries for retry', async () => {
+  const sms = new MockChannelAdapter({ channel: CHANNELS.SMS, fail: true });
+  const service = new NotificationService({ adapters: { sms }, retryDelayMs: 0 });
+
+  await service.schedule({ id: 'notification-retry', channel: CHANNELS.SMS, body: 'Retry me' }, '2026-01-01T00:00:00.000Z');
+  const firstDispatch = await service.dispatchScheduled({ now: '2026-01-02T00:00:00.000Z' });
+  assert.equal(firstDispatch.status, DELIVERY_STATUS.FAILED);
+  assert.equal(firstDispatch.pending, 1);
+  assert.equal(firstDispatch.results[0].notificationId, 'notification-retry');
+
+  const secondDispatch = await service.dispatchScheduled({ now: '2026-01-03T00:00:00.000Z' });
+  assert.equal(secondDispatch.processed, 1);
+  assert.equal(secondDispatch.pending, 1);
+  assert.equal(secondDispatch.results[0].notificationId, 'notification-retry');
+
+  const thirdDispatch = await service.dispatchScheduled({ now: '2026-01-04T00:00:00.000Z' });
+  assert.equal(thirdDispatch.processed, 1);
+  assert.equal(thirdDispatch.pending, 0);
+});
+
+test('rejects invalid maxScheduleAttempts configuration', () => {
+  assert.throws(
+    () => new NotificationService({ maxScheduleAttempts: 0 }),
+    (error) => error.code === 'NOTIFICATION_INVALID_MAX_ATTEMPTS' && error.status === 500
+  );
+});
+
+test('rejects invalid retryDelayMs configuration', () => {
+  assert.throws(
+    () => new NotificationService({ retryDelayMs: -1 }),
+    (error) => error.code === 'NOTIFICATION_INVALID_RETRY_DELAY' && error.status === 500
+  );
+});
+
 test('exposes a channel adapter contract that requires implementations', async () => {
   const adapter = new ChannelAdapter({ channel: CHANNELS.SMS });
   assert.ok(new MockChannelAdapter({ channel: CHANNELS.SMS }) instanceof ChannelAdapter);

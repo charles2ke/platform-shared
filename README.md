@@ -38,6 +38,9 @@ examples/          Integration stubs for social, travel, workout, and basa
 - Renders `{{variable}}` template placeholders from provided variables.
 - Returns delivery status objects with `sent`, `failed`, `partial`, or `pending` states.
 - Includes an in-memory scheduling workflow via `schedule()` and `dispatchScheduled()` for queue handoff patterns.
+- `dispatchScheduled()` returns `pending` plus `pendingKnown`; when an injected scheduler does not expose `countPending()`, `pending` is `0` and `pendingKnown` is `false`.
+- In-memory retries honor `maxScheduleAttempts` and `retryDelayMs`; injected schedulers can support retries by implementing `requeue()`.
+- `maxScheduleAttempts` bounds total delivery attempts (initial attempt included). Scheduler adapters should return wrapped due entries as `{ notification, scheduledFor }` (or `{ notification, when }`).
 - Defines a `ChannelAdapter` interface and ships `MockChannelAdapter` for default/local provider behavior.
 
 ### Shared

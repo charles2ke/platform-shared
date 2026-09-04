@@ -1,7 +1,7 @@
 export function hasRole(principal, role) {
   return typeof role === 'string'
     && Array.isArray(principal?.roles)
-    && principal.roles.some((currentRole) => currentRole === role);
+    && principal.roles.includes(role);
 }
 
 export function hasPermission(principal, permission) {
@@ -35,6 +35,11 @@ function normalizeRequirements(value) {
   return value.filter((item) => typeof item === 'string' && item.length > 0);
 }
 
+/**
+ * Wildcards are only honored on the granted permission side.
+ * `*` grants global access, while `resource:*` grants access to any
+ * permission under the same scoped prefix.
+ */
 function permissionMatches(grantedPermission, requiredPermission) {
   if (typeof grantedPermission !== 'string' || grantedPermission.length === 0) {
     return false;
@@ -46,8 +51,9 @@ function permissionMatches(grantedPermission, requiredPermission) {
     return true;
   }
 
-  if (grantedPermission.endsWith('*')) {
-    return requiredPermission.startsWith(grantedPermission.slice(0, -1));
+  if (grantedPermission.endsWith(':*')) {
+    const prefix = grantedPermission.slice(0, -1);
+    return requiredPermission.startsWith(prefix) && requiredPermission.length > prefix.length;
   }
 
   return false;
