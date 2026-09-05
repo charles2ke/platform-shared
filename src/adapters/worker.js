@@ -59,8 +59,10 @@ export function createNotificationWorker(service, {
       if (timer !== undefined) {
         return timer;
       }
+      // Interval-triggered runs never throw: failures go to `onError` when
+      // configured, and are logged otherwise, so the loop keeps running.
       timer = setIntervalImpl(() => {
-        void runOnce().catch((error) => logger.error?.('Notification worker run failed', { error: normalizeError(error) }));
+        void runOnce().catch(() => undefined);
       }, intervalMs);
       timer.unref?.();
       return timer;
@@ -79,8 +81,11 @@ export function createNotificationWorker(service, {
  * a provider outage is fixed. Records are drained from the store and scheduled
  * again through the service.
  *
+ * Records that cannot be scheduled again are put back into the store instead of
+ * being lost, and are reported as `failed`.
+ *
  * @param {{service: object, store: object, when?: Date, principal?: object}} options
- * @returns {Promise<{replayed: number, notifications: string[]}>}
+ * @returns {Promise<{replayed: number, notifications: string[], failed: object[]}>}
  */
 export async function replayDeadLetters({ service, store, when = new Date(), principal } = {}) {
   if (!service || typeof service.schedule !== 'function') {
@@ -92,10 +97,16 @@ export async function replayDeadLetters({ service, store, when = new Date(), pri
 
   const records = await store.drain();
   const notifications = [];
+  const failed = [];
   for (const record of records) {
-    await service.schedule(record.notification, when, { principal });
-    notifications.push(record.notification?.id);
+    try {
+      await service.schedule(record.notification, when, { principal });
+      notifications.push(record.notification?.id);
+    } catch (error) {
+      failed.push({ notification: record.notification, error: normalizeError(error, 'NOTIFICATION_REPLAY_FAILED') });
+      await store.add(record);
+    }
   }
 
-  return { replayed: notifications.length, notifications };
+  return { replayed: notifications.length, notifications, failed };
 }

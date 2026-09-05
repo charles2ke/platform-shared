@@ -164,9 +164,16 @@ test('replays dead-lettered notifications back onto the schedule', async () => {
   assert.equal((await deadLetterStore.list()).length, 1);
 
   const replay = await replayDeadLetters({ service, store: deadLetterStore, when: new Date('2026-01-02T00:00:00Z') });
-  assert.deepEqual(replay, { replayed: 1, notifications: ['replay-1'] });
+  assert.deepEqual(replay, { replayed: 1, notifications: ['replay-1'], failed: [] });
   assert.equal((await service.listScheduled()).length, 1);
   assert.equal((await deadLetterStore.list()).length, 0);
+
+  // A record that cannot be re-scheduled goes back to the store instead of being lost.
+  await deadLetterStore.add({ notification: { id: 'replay-2', channels: ['email'], body: 'hi' } });
+  const failedReplay = await replayDeadLetters({ service, store: deadLetterStore, when: new Date('invalid') });
+  assert.equal(failedReplay.replayed, 0);
+  assert.equal(failedReplay.failed[0].error.code, 'NOTIFICATION_INVALID_SCHEDULE_TIME');
+  assert.deepEqual((await deadLetterStore.list()).map((record) => record.notification.id), ['replay-2']);
 
   await assert.rejects(() => replayDeadLetters({ service: {}, store: deadLetterStore }), TypeError);
   await assert.rejects(() => replayDeadLetters({ service, store: {} }), TypeError);

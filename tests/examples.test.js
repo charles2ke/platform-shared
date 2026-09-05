@@ -109,7 +109,7 @@ test('social example ends a whole session on logout and replays dead-lettered re
   }
 
   assert.equal((await travel.deadLetterStore.list()).length, 1);
-  assert.deepEqual(await travel.replayFailedReminders(attempt), { replayed: 1, notifications: ['trip-t-3'] });
+  assert.deepEqual(await travel.replayFailedReminders(attempt), { replayed: 1, notifications: ['trip-t-3'], failed: [] });
   assert.deepEqual((await travel.listPendingReminders()).map((entry) => entry.notification.id), ['trip-t-3']);
 });
 
