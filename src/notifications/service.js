@@ -1,3 +1,4 @@
+import { toAccessPolicy } from '../auth/policy.js';
 import { createError, normalizeError } from '../shared/errors.js';
 import { noopLogger } from '../shared/logger.js';
 import { renderTemplate } from './template.js';
@@ -6,7 +7,7 @@ import { CHANNELS, DELIVERY_STATUS } from './types.js';
 export class NotificationService {
   #scheduled = [];
 
-  constructor({ adapters = {}, logger = noopLogger, scheduler, maxScheduleAttempts = 3, retryDelayMs = 60_000, retryBackoffFactor = 1, maxRetryDelayMs, onDeadLetter } = {}) {
+  constructor({ adapters = {}, logger = noopLogger, scheduler, maxScheduleAttempts = 3, retryDelayMs = 60_000, retryBackoffFactor = 1, maxRetryDelayMs, onDeadLetter, deadLetterStore, retryPartialFailures = true, policy, roleRegistry } = {}) {
     this.adapters = adapters;
     this.logger = logger;
     this.scheduler = scheduler;
@@ -25,11 +26,23 @@ export class NotificationService {
     if (onDeadLetter !== undefined && typeof onDeadLetter !== 'function') {
       throw createError('NOTIFICATION_INVALID_DEAD_LETTER_HANDLER', 'onDeadLetter must be a function', { status: 500 });
     }
+    if (deadLetterStore !== undefined && typeof deadLetterStore.add !== 'function') {
+      throw createError('NOTIFICATION_INVALID_DEAD_LETTER_STORE', 'deadLetterStore must implement add()', { status: 500 });
+    }
     this.maxScheduleAttempts = maxScheduleAttempts;
     this.retryDelayMs = retryDelayMs;
     this.retryBackoffFactor = retryBackoffFactor;
     this.maxRetryDelayMs = maxRetryDelayMs;
     this.onDeadLetter = onDeadLetter;
+    this.deadLetterStore = deadLetterStore;
+    this.retryPartialFailures = retryPartialFailures !== false;
+    this.policy = toAccessPolicy(policy, { roleRegistry });
+  }
+
+  #enforce(action, { principal } = {}) {
+    if (this.policy) {
+      this.policy.enforce(action, principal);
+    }
   }
 
   /** Delay in milliseconds before the retry that follows `attempts` failures. */
@@ -40,7 +53,8 @@ export class NotificationService {
     return this.maxRetryDelayMs === undefined ? delay : Math.min(delay, this.maxRetryDelayMs);
   }
 
-  async send(notification) {
+  async send(notification, options = {}) {
+    this.#enforce('notification.send', options);
     const channels = normalizeChannels(notification);
     if (channels.length === 0) {
       throw createError('NOTIFICATION_CHANNEL_REQUIRED', 'At least one notification channel is required', { status: 400 });
@@ -77,7 +91,8 @@ export class NotificationService {
     };
   }
 
-  async schedule(notification, when) {
+  async schedule(notification, when, options = {}) {
+    this.#enforce('notification.schedule', options);
     const scheduledFor = normalizeScheduleDate(when);
 
     if (this.scheduler) {
@@ -98,7 +113,8 @@ export class NotificationService {
   }
 
   /** Lists pending scheduled entries from the in-memory queue or injected scheduler. */
-  async listScheduled() {
+  async listScheduled(options = {}) {
+    this.#enforce('notification.list', options);
     if (!this.scheduler) {
       return this.#scheduled.map((entry) => ({ ...entry }));
     }
@@ -120,7 +136,8 @@ export class NotificationService {
    * when a trip is cancelled or a workout is completed early.
    * @returns {Promise<{notificationId: string, cancelled: number}>}
    */
-  async cancelScheduled(notificationId) {
+  async cancelScheduled(notificationId, options = {}) {
+    this.#enforce('notification.cancel', options);
     if (typeof notificationId !== 'string' || notificationId.length === 0) {
       throw createError('NOTIFICATION_INVALID_ID', 'A notification id is required to cancel scheduled deliveries', { status: 400 });
     }
@@ -146,7 +163,8 @@ export class NotificationService {
     throw createError('NOTIFICATION_INVALID_SCHEDULER_RESPONSE', 'scheduler.cancel() must return a boolean or a non-negative integer', { status: 500 });
   }
 
-  async dispatchScheduled({ now = new Date() } = {}) {
+  async dispatchScheduled({ now = new Date(), principal } = {}) {
+    this.#enforce('notification.dispatch', { principal });
     const nowDate = normalizeScheduleDate(now, { code: 'NOTIFICATION_INVALID_DISPATCH_TIME', message: 'Dispatch time must be a valid date value' });
     const dueEntries = await this.#loadDueEntries(nowDate);
     const results = [];
@@ -155,15 +173,19 @@ export class NotificationService {
     for (const entry of dueEntries) {
       try {
         const delivery = await this.send(entry.notification);
-        const retry = delivery.status === DELIVERY_STATUS.FAILED
-          ? await this.#queueRetry(entry, retryEntries, nowDate)
+        const failedChannels = failedChannelsOf(delivery);
+        const needsRetry = delivery.status === DELIVERY_STATUS.FAILED
+          || (this.retryPartialFailures && delivery.status === DELIVERY_STATUS.PARTIAL && failedChannels.length > 0);
+        const retry = needsRetry
+          ? await this.#queueRetry(entry, retryEntries, nowDate, failedChannels)
           : undefined;
         results.push({
           notificationId: entry.notification.id,
           scheduledFor: entry.scheduledFor,
           attempts: (entry.attempts ?? 0) + 1,
+          retryChannels: retry ? retry.notification.channels : undefined,
           retryScheduledFor: retry?.scheduledFor,
-          deadLettered: delivery.status === DELIVERY_STATUS.FAILED && retry === undefined,
+          deadLettered: needsRetry && retry === undefined,
           delivery
         });
       } catch (error) {
@@ -233,10 +255,10 @@ export class NotificationService {
     return dueEntries.map((entry) => normalizeScheduledEntry(entry));
   }
 
-  async #queueRetry(entry, retryEntries, nowDate) {
-    const retryEntry = this.#buildRetryEntry(entry, nowDate);
+  async #queueRetry(entry, retryEntries, nowDate, failedChannels = []) {
+    const retryEntry = this.#buildRetryEntry(entry, nowDate, failedChannels);
     if (!retryEntry) {
-      await this.#deadLetter(entry, 'retry-limit-reached');
+      await this.#deadLetter(entry, 'retry-limit-reached', failedChannels);
       return undefined;
     }
 
@@ -253,17 +275,36 @@ export class NotificationService {
     this.logger.warn('Scheduled notification retry skipped because injected scheduler does not implement requeue()', {
       notificationId: entry.notification?.id
     });
-    await this.#deadLetter(entry, 'scheduler-requeue-unsupported');
+    await this.#deadLetter(entry, 'scheduler-requeue-unsupported', failedChannels);
     return undefined;
   }
 
-  async #deadLetter(entry, reason) {
+  async #deadLetter(entry, reason, failedChannels = []) {
+    const record = {
+      notification: entry.notification,
+      attempts: (entry.attempts ?? 0) + 1,
+      reason,
+      channels: failedChannels.length > 0 ? failedChannels : undefined,
+      failedAt: new Date().toISOString()
+    };
+
+    if (this.deadLetterStore) {
+      try {
+        await this.deadLetterStore.add(record);
+      } catch (error) {
+        this.logger.warn('Notification dead-letter store failed', {
+          notificationId: entry.notification?.id,
+          error: normalizeError(error, 'NOTIFICATION_DEAD_LETTER_FAILED')
+        });
+      }
+    }
+
     if (!this.onDeadLetter) {
       return;
     }
 
     try {
-      await this.onDeadLetter({ notification: entry.notification, attempts: (entry.attempts ?? 0) + 1, reason });
+      await this.onDeadLetter(record);
     } catch (error) {
       this.logger.warn('Notification dead-letter handler failed', {
         notificationId: entry.notification?.id,
@@ -272,7 +313,7 @@ export class NotificationService {
     }
   }
 
-  #buildRetryEntry(entry, nowDate) {
+  #buildRetryEntry(entry, nowDate, failedChannels = []) {
     const attempts = (entry.attempts ?? 0) + 1;
     if (attempts >= this.maxScheduleAttempts) {
       this.logger.warn('Scheduled notification retry limit reached', {
@@ -284,10 +325,37 @@ export class NotificationService {
 
     return {
       ...entry,
+      notification: retryNotification(entry.notification, failedChannels),
       attempts,
       scheduledFor: new Date(nowDate.getTime() + this.retryDelayFor(attempts)).toISOString()
     };
   }
+}
+
+/** Channels whose delivery failed, used to retry only what actually failed. */
+function failedChannelsOf(delivery) {
+  return (delivery?.deliveries ?? [])
+    .filter((item) => item?.status === DELIVERY_STATUS.FAILED && typeof item.channel === 'string')
+    .map((item) => item.channel);
+}
+
+/**
+ * Narrows a retried notification to the channels that failed so already
+ * delivered channels are not sent twice.
+ */
+function retryNotification(notification, failedChannels) {
+  const channels = normalizeChannels(notification);
+  if (failedChannels.length === 0 || failedChannels.length === channels.length) {
+    return notification;
+  }
+
+  const retryChannels = channels.filter((channel) => failedChannels.includes(channel));
+  if (retryChannels.length === 0) {
+    return notification;
+  }
+
+  const { channel, ...rest } = notification;
+  return { ...rest, channels: retryChannels };
 }
 
 function normalizeChannels(notification) {

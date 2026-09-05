@@ -30,6 +30,7 @@ export function createAuthGuard({ secret, issuer, audience, logger = noopLogger,
     const payload = verifyToken(token, { secret, issuer, audience, expectedUse: 'access', revocationStore, clockToleranceSeconds });
     const principal = resolvePrincipal({
       id: payload.sub,
+      sessionId: payload.sid,
       roles: payload.roles ?? [],
       permissions: payload.permissions ?? [],
       claims: payload

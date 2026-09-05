@@ -18,6 +18,14 @@ export class TokenRevocationStore {
     return notImplemented('revokeSubject');
   }
 
+  /**
+   * Revokes every token issued under a session id (`sid` claim), ending the
+   * access token and refresh token of one login at the same time.
+   */
+  revokeSession(sessionId, options) {
+    return notImplemented('revokeSession');
+  }
+
   isRevoked(payload) {
     return notImplemented('isRevoked');
   }
@@ -25,6 +33,7 @@ export class TokenRevocationStore {
 
 export class InMemoryTokenRevocationStore extends TokenRevocationStore {
   #revokedTokenIds = new Map();
+  #revokedSessionIds = new Map();
   #subjectCutoffs = new Map();
 
   /**
@@ -57,12 +66,32 @@ export class InMemoryTokenRevocationStore extends TokenRevocationStore {
     return cutoff;
   }
 
+  /**
+   * Revokes every token that carries this session id.
+   * @param {string} sessionId Session id (`sid` claim).
+   * @param {{ expiresAt?: number }} [options] Epoch seconds used by `prune()`.
+   */
+  revokeSession(sessionId, { expiresAt } = {}) {
+    if (typeof sessionId !== 'string' || sessionId.length === 0) {
+      throw createError('AUTH_SESSION_NOT_REVOCABLE', 'A session id is required to revoke a session', { status: 400 });
+    }
+
+    const existing = this.#revokedSessionIds.get(sessionId);
+    const expiry = typeof expiresAt === 'number' ? expiresAt : undefined;
+    this.#revokedSessionIds.set(sessionId, existing === undefined || expiry === undefined ? expiry : Math.max(existing, expiry));
+    return sessionId;
+  }
+
   isRevoked(payload) {
     if (!payload || typeof payload !== 'object') {
       return false;
     }
 
     if (typeof payload.jti === 'string' && this.#revokedTokenIds.has(payload.jti)) {
+      return true;
+    }
+
+    if (typeof payload.sid === 'string' && this.#revokedSessionIds.has(payload.sid)) {
       return true;
     }
 
@@ -80,6 +109,12 @@ export class InMemoryTokenRevocationStore extends TokenRevocationStore {
     for (const [tokenId, exp] of this.#revokedTokenIds) {
       if (exp !== undefined && exp <= currentTime) {
         this.#revokedTokenIds.delete(tokenId);
+        pruned += 1;
+      }
+    }
+    for (const [sessionId, exp] of this.#revokedSessionIds) {
+      if (exp !== undefined && exp <= currentTime) {
+        this.#revokedSessionIds.delete(sessionId);
         pruned += 1;
       }
     }
