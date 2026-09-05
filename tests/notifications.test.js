@@ -332,4 +332,9 @@ test('reports unsupported cancel and list operations on partial schedulers', asy
     { code: 'NOTIFICATION_INVALID_SCHEDULER_RESPONSE' }
   );
   assert.equal(await new NotificationService({ adapters: {}, scheduler: { ...partial, cancel: async () => true } }).cancelScheduled('trip-1').then((result) => result.cancelled), 1);
+  assert.equal(await new NotificationService({ adapters: {}, scheduler: { ...partial, cancel: async () => 2 } }).cancelScheduled('trip-1').then((result) => result.cancelled), 2);
+  await assert.rejects(
+    () => new NotificationService({ adapters: {}, scheduler: { ...partial, cancel: async () => '1' } }).cancelScheduled('trip-1'),
+    { code: 'NOTIFICATION_INVALID_SCHEDULER_RESPONSE' }
+  );
 });

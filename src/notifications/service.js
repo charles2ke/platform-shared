@@ -137,7 +137,13 @@ export class NotificationService {
     }
 
     const cancelled = await this.scheduler.cancel(notificationId);
-    return { notificationId, cancelled: Number.isInteger(cancelled) ? cancelled : cancelled ? 1 : 0 };
+    if (typeof cancelled === 'boolean') {
+      return { notificationId, cancelled: cancelled ? 1 : 0 };
+    }
+    if (Number.isInteger(cancelled) && cancelled >= 0) {
+      return { notificationId, cancelled };
+    }
+    throw createError('NOTIFICATION_INVALID_SCHEDULER_RESPONSE', 'scheduler.cancel() must return a boolean or a non-negative integer', { status: 500 });
   }
 
   async dispatchScheduled({ now = new Date() } = {}) {
