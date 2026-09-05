@@ -248,7 +248,10 @@ export function revokeSession(payload, { revocationStore } = {}) {
   }
 
   if (typeof payload.sid === 'string' && payload.sid.length > 0 && typeof revocationStore.revokeSession === 'function') {
-    revocationStore.revokeSession(payload.sid, { expiresAt: payload.exp });
+    revocationStore.revokeSession(
+      payload.sid,
+      payload.token_use === 'refresh' ? { expiresAt: payload.exp } : undefined
+    );
     return { sessionId: payload.sid };
   }
 

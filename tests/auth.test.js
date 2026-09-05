@@ -268,9 +268,17 @@ test('decodes and describes tokens for introspection', () => {
 
 test('issues access and refresh tokens under one session id and revokes them together', () => {
   const revocationStore = new InMemoryTokenRevocationStore();
-  const pair = issueTokenPair({ subject: 'user-session', roles: ['member'], secret });
-  const accessPayload = verifyToken(pair.accessToken, { secret, expectedUse: 'access' });
-  const refreshPayload = verifyToken(pair.refreshToken, { secret, expectedUse: 'refresh' });
+  const now = new Date('2026-01-01T00:00:00Z');
+  const pair = issueTokenPair({
+    subject: 'user-session',
+    roles: ['member'],
+    secret,
+    now,
+    accessTokenTtlSeconds: 60,
+    refreshTokenTtlSeconds: 600
+  });
+  const accessPayload = verifyToken(pair.accessToken, { secret, expectedUse: 'access', now });
+  const refreshPayload = verifyToken(pair.refreshToken, { secret, expectedUse: 'refresh', now });
 
   assert.equal(accessPayload.sid, pair.sessionId);
   assert.equal(refreshPayload.sid, pair.sessionId);
@@ -278,8 +286,14 @@ test('issues access and refresh tokens under one session id and revokes them tog
   assert.equal(describeToken(accessPayload).sessionId, pair.sessionId);
 
   assert.deepEqual(revokeSession(accessPayload, { revocationStore }), { sessionId: pair.sessionId });
-  assert.throws(() => verifyToken(pair.accessToken, { secret, expectedUse: 'access', revocationStore }), { code: 'AUTH_TOKEN_REVOKED' });
-  assert.throws(() => verifyToken(pair.refreshToken, { secret, expectedUse: 'refresh', revocationStore }), { code: 'AUTH_TOKEN_REVOKED' });
+  assert.throws(() => verifyToken(pair.accessToken, { secret, expectedUse: 'access', revocationStore, now }), { code: 'AUTH_TOKEN_REVOKED' });
+  assert.throws(() => verifyToken(pair.refreshToken, { secret, expectedUse: 'refresh', revocationStore, now }), { code: 'AUTH_TOKEN_REVOKED' });
+  const twoMinutesLater = new Date(now.getTime() + 120_000);
+  assert.equal(revocationStore.prune(twoMinutesLater), 0);
+  assert.throws(
+    () => verifyToken(pair.refreshToken, { secret, expectedUse: 'refresh', revocationStore, now: twoMinutesLater }),
+    { code: 'AUTH_TOKEN_REVOKED' }
+  );
 });
 
 test('revokeSession falls back to single token revocation and validates input', () => {
