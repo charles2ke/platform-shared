@@ -59,8 +59,8 @@ export function createNotificationWorker(service, {
       if (timer !== undefined) {
         return timer;
       }
-      // Interval-triggered runs never throw: failures go to `onError` when
-      // configured, and are logged otherwise, so the loop keeps running.
+      // Interval-triggered runs never throw so the loop keeps going: runOnce()
+      // already logs the failure and forwards it to `onError` when configured.
       timer = setIntervalImpl(() => {
         void runOnce().catch(() => undefined);
       }, intervalMs);
