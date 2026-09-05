@@ -12,6 +12,7 @@ src/
   profile/         Canonical profile model validation plus CRUD service and memory adapter
   notifications/   Unified send/schedule API, template rendering, channel adapters
   shared/          Environment config, structured errors, logging hooks
+  adapters/        Framework/provider adapters: HTTP middleware, HTTP channel, worker loop
 examples/          Integration stubs for social, travel, workout, and basa
 ```
 
@@ -25,8 +26,10 @@ examples/          Integration stubs for social, travel, workout, and basa
 - `decodeToken()` inspects a token without verifying it (logging/debugging only), and `describeToken()` summarizes a verified payload (`issuedAt`, `expiresAt`, `expiresInSeconds`, `expired`) for session/introspection endpoints.
 - `InMemoryTokenRevocationStore` supports single-token revocation (`revokeToken()`), "log out everywhere" (`revokeSubject()`), and `prune()` for expired entries. Implementations must be synchronous so guards stay synchronous.
 - Provides `createAuthGuard()` and `protect()` helpers for framework-specific route wrappers. Guards accept `revocationStore` and `roleRegistry` so revocation and RBAC are enforced on every request.
+- `issueTokenPair()` stamps a shared session id (`sid`) on the access and refresh token and returns it as `sessionId`, so one login can be revoked as a unit. `revokeSession(payload, { revocationStore })` ends that session (logout) and falls back to single-token revocation for tokens issued without a `sid`. Each `rotateTokenPair()` call starts a new session unless `sessionId` is passed; replaying a rotated refresh token also revokes the replayed session.
 - Includes RBAC scaffolding with role and permission checks, a `createRoleRegistry()` role-to-permission map with inheritance, `resolvePrincipal()` for expanding token roles into permissions, and `authorize()` for enforcement outside route guards.
 - Role inheritance also applies to role checks: `registry.rolesFor()` expands inherited roles and `resolvePrincipal()` stores them on `principal.effectiveRoles` (token `roles` stay untouched), so a `coach` that inherits `athlete` satisfies `{ roles: ['athlete'] }`.
+- `createAccessPolicy({ 'profile.update': { permissions: ['profile:write'] } })` maps action names to requirements so RBAC is enforced inside services, jobs, and queue consumers, not only on HTTP routes. `ProfileService` and `NotificationService` accept the resulting `policy` (or a plain requirement map) and a `roleRegistry`; callers then pass `{ principal }` per call. Actions without requirements stay open; a missing principal fails with `AUTH_PRINCIPAL_REQUIRED` unless `requirePrincipal: false`.
 - Exposes an `AccountStore` interface plus an `InMemoryAccountStore` default that can be replaced by persistent adapters later.
 
 ### Profile
@@ -50,7 +53,17 @@ examples/          Integration stubs for social, travel, workout, and basa
 - In-memory retries honor `maxScheduleAttempts` and `retryDelayMs`; injected schedulers can support retries by implementing `requeue()`.
 - `maxScheduleAttempts` bounds total delivery attempts (initial attempt included). Scheduler adapters should return wrapped due entries as `{ notification, scheduledFor }` (or `{ notification, when }`).
 - `listScheduled()` returns pending entries and `cancelScheduled(notificationId)` drops queued deliveries (trip cancelled, workout completed early); injected schedulers must implement `list()` and `cancel()` for these.
+- Partial failures are retried per channel: only the channels that failed are re-queued (`result.retryChannels`), so delivered channels are never sent twice. Set `retryPartialFailures: false` to keep the previous behavior.
+- A `deadLetterStore` (see `DeadLetterStore` / `InMemoryDeadLetterQueue`) persists `{ notification, attempts, reason, channels, failedAt }` records for exhausted retries so failures can be inspected and replayed with `replayDeadLetters()`.
+- Enforces the shared access policy on `send()`, `schedule()`, `listScheduled()`, `cancelScheduled()`, and `dispatchScheduled()` when `policy` is supplied.
 - Defines a `ChannelAdapter` interface and ships `MockChannelAdapter` for default/local provider behavior.
+
+### Adapters
+
+- `createExpressAuthMiddleware(guard, { requirements })` mounts a guard in Express/Connect apps and answers with the shared error envelope; `withFetchAuth(handler, guard, requirements)` does the same for fetch-style route handlers (Next.js, Hono, workers).
+- `toHttpErrorResponse(error)` maps any error to `{ status, body }` for consistent API error responses.
+- `HttpChannelAdapter` is a concrete channel adapter that POSTs rendered notifications to a provider endpoint, with `headers`, `transform`, and `timeoutMs` options.
+- `createNotificationWorker(service, { intervalMs })` drains scheduled notifications from a cron trigger (`runOnce()`) or a long-running worker (`start()` / `stop()`), and `replayDeadLetters({ service, store })` re-queues dead-lettered notifications after an outage.
 
 ### Shared
 
@@ -136,8 +149,47 @@ const session = describeToken(principal.claims); // { expiresAt, expiresInSecond
 guard(request, { roles: ['member'] });
 
 // Logout endpoints.
-revocationStore.revokeToken(principal.claims);
-revocationStore.revokeSubject('user-123');
+revokeSession(principal.claims, { revocationStore }); // ends this login (access + refresh)
+revocationStore.revokeToken(principal.claims);        // single token
+revocationStore.revokeSubject('user-123');            // everywhere
+```
+
+### Enforce RBAC inside services, jobs, and consumers
+
+```js
+import { createAccessPolicy } from '@charles2ke/platform-shared/auth';
+import { ProfileService } from '@charles2ke/platform-shared/profile';
+
+const policy = createAccessPolicy({
+  'profile.get': { permissions: ['profile:read'] },
+  'profile.update': { permissions: ['profile:write'] },
+  'profile.delete': { roles: ['admin'] }
+}, { roleRegistry });
+
+const profiles = new ProfileService({ store, policy });
+
+await profiles.update(id, { timezone: 'Africa/Nairobi' }, { principal });
+```
+
+### Mount guards and providers in a consumer repo
+
+```js
+import { createExpressAuthMiddleware, createNotificationWorker, HttpChannelAdapter, replayDeadLetters, withFetchAuth } from '@charles2ke/platform-shared/adapters';
+
+app.get('/feed', createExpressAuthMiddleware(guard, { requirements: { roles: ['member'] } }), handler);
+
+export const GET = withFetchAuth(routeHandler, guard, { permissions: ['profile:read'] });
+
+const notifications = new NotificationService({
+  adapters: { email: new HttpChannelAdapter({ channel: 'email', endpoint: process.env.EMAIL_WEBHOOK_URL, headers: { authorization: providerKey } }) },
+  scheduler,
+  deadLetterStore
+});
+
+const worker = createNotificationWorker(notifications, { intervalMs: 60_000 });
+worker.start();
+
+await replayDeadLetters({ service: notifications, store: deadLetterStore });
 ```
 
 ### Manage profiles
@@ -209,6 +261,7 @@ const notifications = new NotificationService({
   retryDelayMs: 30_000,
   retryBackoffFactor: 2,
   maxRetryDelayMs: 15 * 60_000,
+  deadLetterStore, // durable record of exhausted retries, replayable later
   onDeadLetter: ({ notification, attempts, reason }) => auditLog.write({ notification, attempts, reason })
 });
 
@@ -234,10 +287,10 @@ See `examples/social.js`, `examples/travel.js`, `examples/workout.js`, and `exam
 
 | Example | Shows |
 | --- | --- |
-| `social.js` | Login, guarded routes, refresh-token rotation with replay detection, session introspection, single-session and global logout, role registry. |
+| `social.js` | Login, guarded routes (including Express middleware), refresh-token rotation with replay detection, session introspection, session/single-token/global logout, role registry. |
 | `workout.js` | Role-derived and inherited-role permissions, `authorize()` in service code, scheduled push nudges with exponential backoff, cancellation, and dead lettering. |
-| `travel.js` | Immediate and scheduled multi-channel reminders drained by a worker loop, plus pending listing and cancellation. |
-| `basa.js` | RBAC-guarded order operations, profile CRUD, and scheduled email/SMS order updates with pending listing and cancellation. |
+| `travel.js` | Immediate and scheduled multi-channel reminders drained by `createNotificationWorker()`, plus pending listing, cancellation, dead-letter capture, and replay. |
+| `basa.js` | RBAC-guarded order operations, policy-enforced profile CRUD (`createAccessPolicy()`), and scheduled email/SMS order updates with pending listing and cancellation. |
 
 ## Migration/adoption checklist
 
@@ -287,10 +340,13 @@ npm run build
 - Store and channel adapters are constructor-injected to make persistence and provider migration explicit.
 - Notification scheduling supports in-memory queuing for local workflow depth; downstream apps should still connect production queues/schedulers through adapters.
 - Token revocation is an injectable synchronous store so guards remain synchronous; production apps back it with a cache warmed from their session store.
+- Access and refresh tokens carry a shared session id so logout and refresh-token replay can close a whole login without revoking every session for a subject.
+- Authorization is expressed as action-keyed policies rather than hard-coded checks, so the same requirements apply to HTTP routes, background jobs, and queue consumers.
+- Framework and provider glue lives in `src/adapters/` so the core modules stay framework-light while consumer repos get working starting points.
 
 Recommended next steps:
 
 1. Publish the package or configure each app to consume it from GitHub.
 2. Add persistent adapters for each app's user/account/profile data store.
-3. Add real email, SMS, and push adapters behind the existing notification channel interface.
+3. Add real email, SMS, and push adapters behind the existing notification channel interface (`HttpChannelAdapter` covers HTTP providers).
 4. Standardize role and permission names across `social`, `travel`, `workout`, and `basa`.
