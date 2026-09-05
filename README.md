@@ -20,8 +20,10 @@ examples/          Integration stubs for social, travel, workout, and basa
 ### Auth
 
 - Issues and verifies HMAC SHA-256 JWT access and refresh tokens.
-- Provides `createAuthGuard()` and `protect()` helpers for framework-specific route wrappers.
-- Includes RBAC scaffolding with role and permission checks.
+- Covers the full token lifecycle: `issueTokenPair()`, `refreshAccessToken()`, `rotateTokenPair()` for refresh-token rotation, and revocation through a `TokenRevocationStore`.
+- `InMemoryTokenRevocationStore` supports single-token revocation (`revokeToken()`), "log out everywhere" (`revokeSubject()`), and `prune()` for expired entries. Implementations must be synchronous so guards stay synchronous.
+- Provides `createAuthGuard()` and `protect()` helpers for framework-specific route wrappers. Guards accept `revocationStore` and `roleRegistry` so revocation and RBAC are enforced on every request.
+- Includes RBAC scaffolding with role and permission checks, a `createRoleRegistry()` role-to-permission map with inheritance, `resolvePrincipal()` for expanding token roles into permissions, and `authorize()` for enforcement outside route guards.
 - Exposes an `AccountStore` interface plus an `InMemoryAccountStore` default that can be replaced by persistent adapters later.
 
 ### Profile
@@ -38,6 +40,9 @@ examples/          Integration stubs for social, travel, workout, and basa
 - Renders `{{variable}}` template placeholders from provided variables.
 - Returns delivery status objects with `sent`, `failed`, `partial`, or `pending` states.
 - Includes an in-memory scheduling workflow via `schedule()` and `dispatchScheduled()` for queue handoff patterns.
+- Ships a `NotificationScheduler` interface plus `InMemoryNotificationScheduler` (enqueue/dequeueDue/requeue/countPending/list) as a reference queue adapter.
+- Retries use configurable exponential backoff: `retryDelayMs * retryBackoffFactor ** (attempts - 1)`, capped by `maxRetryDelayMs`. `retryDelayFor(attempts)` exposes the computed delay.
+- Exhausted retries (or schedulers without `requeue()`) call the optional `onDeadLetter({ notification, attempts, reason })` hook; `dispatchScheduled()` reports `retried` and `deadLettered` counts and per-result `attempts`, `retryScheduledFor`, and `deadLettered`.
 - `dispatchScheduled()` returns `pending` plus `pendingKnown`; when an injected scheduler does not expose `countPending()`, `pending` is `0` and `pendingKnown` is `false`.
 - In-memory retries honor `maxScheduleAttempts` and `retryDelayMs`; injected schedulers can support retries by implementing `requeue()`.
 - `maxScheduleAttempts` bounds total delivery attempts (initial attempt included). Scheduler adapters should return wrapped due entries as `{ notification, scheduledFor }` (or `{ notification, when }`).
@@ -89,6 +94,32 @@ const guard = createAuthGuard({
 });
 
 const principal = guard(request, { permissions: ['profile:read'] });
+```
+
+### Rotate, revoke, and map roles to permissions
+
+```js
+import {
+  createAuthGuard,
+  createRoleRegistry,
+  InMemoryTokenRevocationStore,
+  rotateTokenPair
+} from '@charles2ke/platform-shared/auth';
+
+const revocationStore = new InMemoryTokenRevocationStore();
+const roleRegistry = createRoleRegistry({
+  member: ['profile:read'],
+  moderator: { permissions: ['post:delete'], inherits: ['member'] }
+});
+
+const guard = createAuthGuard({ secret, issuer: 'platform-shared', audience: 'social', revocationStore, roleRegistry });
+
+// Refresh endpoint: rotate the pair and revoke the presented refresh token.
+const rotated = rotateTokenPair(refreshToken, { secret, issuer: 'platform-shared', audience: 'social', revocationStore });
+
+// Logout endpoints.
+revocationStore.revokeToken(principal.claims);
+revocationStore.revokeSubject('user-123');
 ```
 
 ### Manage profiles
@@ -147,15 +178,44 @@ await notifications.send({
 });
 ```
 
+### Schedule notifications with retries
+
+```js
+import { InMemoryNotificationScheduler, NotificationService } from '@charles2ke/platform-shared/notifications';
+
+const scheduler = new InMemoryNotificationScheduler(); // swap for a queue-backed adapter
+const notifications = new NotificationService({
+  adapters,
+  scheduler,
+  maxScheduleAttempts: 4,
+  retryDelayMs: 30_000,
+  retryBackoffFactor: 2,
+  maxRetryDelayMs: 15 * 60_000,
+  onDeadLetter: ({ notification, attempts, reason }) => auditLog.write({ notification, attempts, reason })
+});
+
+await notifications.schedule(reminder, new Date(Date.now() + 60_000));
+
+// Cron/worker loop
+const { processed, retried, deadLettered, pending } = await notifications.dispatchScheduled();
+```
+
 ## Downstream integration approach
 
 1. Install or vendor this package in the consuming app.
 2. Load app-specific env vars with `loadConfig()` or the app's existing config layer.
 3. Wrap `createAuthGuard()` in the app's router middleware layer.
-4. Replace in-memory stores/adapters with app-owned persistence and provider adapters by extending `AccountStore`, `ProfileStore`, or `ChannelAdapter` (or supplying objects with the same methods).
+4. Replace in-memory stores/adapters with app-owned persistence and provider adapters by extending `AccountStore`, `ProfileStore`, `ChannelAdapter`, `NotificationScheduler`, or `TokenRevocationStore` (or supplying objects with the same methods).
 5. Keep domain-specific behavior in the app; keep shared identity/profile/notification contracts here.
 
-See `examples/social.js`, `examples/travel.js`, `examples/workout.js`, and `examples/basa.js` for starting points.
+See `examples/social.js`, `examples/travel.js`, `examples/workout.js`, and `examples/basa.js` for starting points. They are executable stubs covered by `tests/examples.test.js`:
+
+| Example | Shows |
+| --- | --- |
+| `social.js` | Login, guarded routes, refresh-token rotation, single-session and global logout, role registry. |
+| `workout.js` | Role-derived permissions, `authorize()` in service code, scheduled push nudges with exponential backoff and dead lettering. |
+| `travel.js` | Immediate and scheduled multi-channel reminders drained by a worker loop. |
+| `basa.js` | RBAC-guarded order operations, profile CRUD, and scheduled email/SMS order updates. |
 
 ## Migration/adoption checklist
 
@@ -204,6 +264,7 @@ npm run build
 - Guards are request-shape based instead of Express/Fastify/Next specific, so each app can adapt them to its framework.
 - Store and channel adapters are constructor-injected to make persistence and provider migration explicit.
 - Notification scheduling supports in-memory queuing for local workflow depth; downstream apps should still connect production queues/schedulers through adapters.
+- Token revocation is an injectable synchronous store so guards remain synchronous; production apps back it with a cache warmed from their session store.
 
 Recommended next steps:
 

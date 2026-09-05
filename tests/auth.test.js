@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { AccountStore, createAuthGuard, getBearerToken, InMemoryAccountStore, issueToken, issueTokenPair, protect, refreshAccessToken, verifyToken } from '../src/auth/index.js';
+import { AccountStore, authorize, createAuthGuard, createRoleRegistry, getBearerToken, InMemoryAccountStore, InMemoryTokenRevocationStore, issueToken, issueTokenPair, protect, refreshAccessToken, resolvePrincipal, rotateTokenPair, TokenRevocationStore, verifyToken } from '../src/auth/index.js';
 
 const secret = 'test-secret-that-is-long-enough-for-hmac';
 
@@ -107,4 +107,92 @@ test('exposes an account store contract that requires implementations', async ()
   const store = new AccountStore();
   assert.ok(new InMemoryAccountStore() instanceof AccountStore);
   await assert.rejects(() => store.findById('user-1'), { code: 'AUTH_STORE_NOT_IMPLEMENTED' });
+});
+
+test('rejects revoked tokens by jti and by subject cutoff', () => {
+  const revocationStore = new InMemoryTokenRevocationStore();
+  const token = issueToken({ subject: 'user-revoke', roles: ['member'], secret });
+  const payload = verifyToken(token, { secret });
+  const guard = createAuthGuard({ secret, revocationStore });
+  const authorization = 'Bearer ' + token;
+
+  assert.equal(guard({ headers: { authorization } }).id, 'user-revoke');
+
+  revocationStore.revokeToken(payload);
+  assert.throws(() => guard({ headers: { authorization } }), { code: 'AUTH_TOKEN_REVOKED' });
+
+  const otherToken = issueToken({ subject: 'user-logout-all', secret });
+  const otherPayload = verifyToken(otherToken, { secret });
+  revocationStore.revokeSubject('user-logout-all');
+  assert.equal(revocationStore.isRevoked(otherPayload), true);
+  assert.equal(revocationStore.isRevoked({ sub: 'someone-else', iat: otherPayload.iat }), false);
+});
+
+test('prunes expired revocation entries and validates inputs', () => {
+  const revocationStore = new InMemoryTokenRevocationStore();
+  const token = issueToken({ subject: 'user-prune', secret, ttlSeconds: 60 });
+  const longLivedToken = issueToken({ subject: 'user-keep', secret, ttlSeconds: 3_600 });
+  revocationStore.revokeToken(verifyToken(token, { secret }));
+  revocationStore.revokeToken(verifyToken(longLivedToken, { secret }));
+
+  assert.equal(revocationStore.prune(new Date(Date.now() + 120_000)), 1);
+  assert.equal(revocationStore.prune(new Date(Date.now() + 120_000)), 0);
+  assert.equal(revocationStore.isRevoked(verifyToken(longLivedToken, { secret })), true);
+  assert.throws(() => revocationStore.revokeToken({}), { code: 'AUTH_TOKEN_NOT_REVOCABLE' });
+  assert.throws(() => revocationStore.revokeSubject(''), { code: 'AUTH_MISSING_SUBJECT' });
+  assert.throws(() => revocationStore.revokeSubject('user-1', { issuedBefore: 'not-a-date' }), { code: 'AUTH_INVALID_REVOCATION_TIME' });
+  assert.throws(() => new TokenRevocationStore().isRevoked({}), { code: 'AUTH_REVOCATION_STORE_NOT_IMPLEMENTED' });
+});
+
+test('rotates refresh tokens and invalidates the previous refresh token', () => {
+  const revocationStore = new InMemoryTokenRevocationStore();
+  const pair = issueTokenPair({ subject: 'user-rotate', roles: ['member'], permissions: ['profile:read'], secret });
+  const rotated = rotateTokenPair(pair.refreshToken, { secret, revocationStore });
+
+  assert.equal(verifyToken(rotated.accessToken, { secret, expectedUse: 'access' }).sub, 'user-rotate');
+  assert.deepEqual(verifyToken(rotated.refreshToken, { secret, expectedUse: 'refresh' }).permissions, ['profile:read']);
+  assert.notEqual(rotated.refreshToken, pair.refreshToken);
+  assert.throws(
+    () => verifyToken(pair.refreshToken, { secret, expectedUse: 'refresh', revocationStore }),
+    { code: 'AUTH_TOKEN_REVOKED' }
+  );
+  assert.throws(() => rotateTokenPair(rotated.refreshToken, { secret, revocationStore: {} }), { code: 'AUTH_INVALID_REVOCATION_STORE' });
+  assert.throws(() => verifyToken(rotated.accessToken, { secret, revocationStore: {} }), { code: 'AUTH_INVALID_REVOCATION_STORE' });
+});
+
+test('resolves permissions from a role registry with inheritance', () => {
+  const registry = createRoleRegistry({
+    member: ['profile:read'],
+    moderator: { permissions: ['post:delete'], inherits: ['member'] },
+    admin: { permissions: ['*'], inherits: ['moderator', 'admin'] }
+  });
+
+  assert.deepEqual(registry.roles(), ['member', 'moderator', 'admin']);
+  assert.deepEqual(registry.permissionsFor(['moderator']), ['post:delete', 'profile:read']);
+  assert.deepEqual(registry.permissionsFor(['unknown']), []);
+  assert.deepEqual(registry.permissionsFor('member'), ['profile:read']);
+  assert.deepEqual(registry.permissionsFor({}), []);
+
+  const resolved = resolvePrincipal({ roles: ['moderator'], permissions: ['profile:read'] }, registry);
+  assert.deepEqual(resolved.permissions, ['profile:read', 'post:delete']);
+  assert.deepEqual(resolvePrincipal({ roles: ['member'] }), { roles: ['member'] });
+  assert.throws(() => resolvePrincipal({ roles: [] }, {}), { code: 'AUTH_INVALID_ROLE_REGISTRY' });
+  assert.throws(() => createRoleRegistry([]), { code: 'AUTH_INVALID_ROLE_REGISTRY' });
+  assert.throws(() => createRoleRegistry({ member: [1] }), { code: 'AUTH_INVALID_ROLE_REGISTRY' });
+});
+
+test('guard enforces registry-derived permissions that are absent from the token', () => {
+  const registry = createRoleRegistry({ moderator: { permissions: ['post:delete'], inherits: ['member'] }, member: ['profile:read'] });
+  const token = issueToken({ subject: 'user-registry', roles: ['moderator'], secret });
+  const guard = createAuthGuard({ secret, roleRegistry: registry });
+  const authorization = 'Bearer ' + token;
+
+  assert.deepEqual(guard({ headers: { authorization } }, { permissions: ['post:delete', 'profile:read'] }).roles, ['moderator']);
+  assert.throws(() => guard({ headers: { authorization } }, { permissions: ['billing:write'] }), { code: 'AUTH_FORBIDDEN' });
+});
+
+test('authorize throws a 403 platform error outside of route guards', () => {
+  const principal = { id: 'worker', roles: ['job-runner'], permissions: ['notifications:send'] };
+  assert.equal(authorize(principal, { permissions: ['notifications:send'] }), principal);
+  assert.throws(() => authorize(principal, { roles: ['admin'] }), { code: 'AUTH_FORBIDDEN', status: 403 });
 });
