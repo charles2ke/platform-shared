@@ -37,6 +37,10 @@ examples/          Integration stubs for social, travel, workout, and basa
 - Supports email, SMS, and push channel abstraction.
 - Renders `{{variable}}` template placeholders from provided variables.
 - Returns delivery status objects with `sent`, `failed`, `partial`, or `pending` states.
+- Includes an in-memory scheduling workflow via `schedule()` and `dispatchScheduled()` for queue handoff patterns.
+- `dispatchScheduled()` returns `pending` plus `pendingKnown`; when an injected scheduler does not expose `countPending()`, `pending` is `0` and `pendingKnown` is `false`.
+- In-memory retries honor `maxScheduleAttempts` and `retryDelayMs`; injected schedulers can support retries by implementing `requeue()`.
+- `maxScheduleAttempts` bounds total delivery attempts (initial attempt included). Scheduler adapters should return wrapped due entries as `{ notification, scheduledFor }` (or `{ notification, when }`).
 - Defines a `ChannelAdapter` interface and ships `MockChannelAdapter` for default/local provider behavior.
 
 ### Shared
@@ -199,7 +203,7 @@ npm run build
 - JWT support is implemented with built-in Node `crypto` and HS256 to avoid introducing dependencies before provider decisions are made.
 - Guards are request-shape based instead of Express/Fastify/Next specific, so each app can adapt them to its framework.
 - Store and channel adapters are constructor-injected to make persistence and provider migration explicit.
-- Notification scheduling is currently a placeholder result object; downstream apps should connect it to their queue/scheduler of choice.
+- Notification scheduling supports in-memory queuing for local workflow depth; downstream apps should still connect production queues/schedulers through adapters.
 
 Recommended next steps:
 
