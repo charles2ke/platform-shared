@@ -159,7 +159,7 @@ export function resolvePrincipal(principal, roleRegistry) {
   const effectiveRoles = typeof roleRegistry.rolesFor === 'function' ? roleRegistry.rolesFor(roles) : roles;
   return {
     ...principal,
-    effectiveRoles: [...new Set([...roles, ...effectiveRoles])],
+    effectiveRoles: [...new Set(effectiveRoles)],
     permissions: [...new Set([...(principal?.permissions ?? []), ...rolePermissions])]
   };
 }

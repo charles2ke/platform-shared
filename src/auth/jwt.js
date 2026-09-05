@@ -102,7 +102,7 @@ export function verifyToken(token, { secret, issuer, audience, now = new Date(),
     if (typeof revocationStore.isRevoked !== 'function') {
       throw createError('AUTH_INVALID_REVOCATION_STORE', 'revocationStore must implement a synchronous isRevoked()', { status: 500 });
     }
-    if (revocationStore.isRevoked(payload) === true) {
+    if (revocationStore.isRevoked(payload)) {
       throw createError('AUTH_TOKEN_REVOKED', 'Token has been revoked', { status: 401 });
     }
   }
@@ -181,7 +181,7 @@ export function rotateTokenPair(refreshToken, options = {}) {
     if (typeof revocationStore.revokeToken !== 'function' || typeof revocationStore.isRevoked !== 'function') {
       throw createError('AUTH_INVALID_REVOCATION_STORE', 'revocationStore must implement revokeToken() and isRevoked() to rotate tokens', { status: 500 });
     }
-    if (revocationStore.isRevoked(payload) === true) {
+    if (revocationStore.isRevoked(payload)) {
       if (revokeSubjectOnReuse && typeof revocationStore.revokeSubject === 'function') {
         revocationStore.revokeSubject(payload.sub, { issuedBefore: options.now ?? new Date() });
       }
