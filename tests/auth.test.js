@@ -76,7 +76,9 @@ test('supports wildcard permission checks and string requirements in RBAC', () =
     /required access/
   );
   assert.throws(() => guard({ headers: { authorization } }, { roles: {} }), /required access/);
+  assert.throws(() => guard({ headers: { authorization } }, { roles: '' }), /required access/);
   assert.throws(() => guard({ headers: { authorization } }, { permissions: {} }), /required access/);
+  assert.throws(() => guard({ headers: { authorization } }, { permissions: ['profile:read', ''] }), /required access/);
   assert.throws(() => guard({ headers: { authorization } }, { permissions: 'notifications:*' }), /required access/);
   assert.throws(() => guard({ headers: { authorization } }, { permissions: 'profile:' }), /required access/);
 });

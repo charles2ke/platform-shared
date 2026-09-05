@@ -27,18 +27,23 @@ export function meetsRequirements(principal, { roles = [], permissions = [], req
 }
 
 /**
- * Returns undefined for invalid requirement shapes so callers can fail closed.
+ * @param {unknown} value A requirement string or an array of non-empty requirement strings.
+ * @returns {string[]|undefined} Normalized requirement strings, or undefined when input is invalid.
  */
 function normalizeRequirements(value) {
   if (typeof value === 'string') {
-    return value ? [value] : [];
+    return value.length > 0 ? [value] : undefined;
   }
 
   if (!Array.isArray(value)) {
     return undefined;
   }
 
-  return value.filter((item) => typeof item === 'string' && item.length > 0);
+  if (!value.every((item) => typeof item === 'string' && item.length > 0)) {
+    return undefined;
+  }
+
+  return value;
 }
 
 /**
