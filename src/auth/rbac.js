@@ -26,6 +26,9 @@ export function meetsRequirements(principal, { roles = [], permissions = [], req
   return roleCheck && permissionCheck;
 }
 
+/**
+ * Returns undefined for invalid requirement shapes so callers can fail closed.
+ */
 function normalizeRequirements(value) {
   if (typeof value === 'string') {
     return value ? [value] : [];
