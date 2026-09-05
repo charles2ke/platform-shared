@@ -24,6 +24,10 @@ export class NotificationScheduler {
   async countPending(now) {
     return notImplemented('countPending');
   }
+
+  async list() {
+    return notImplemented('list');
+  }
 }
 
 /**
