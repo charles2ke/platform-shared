@@ -76,9 +76,15 @@ export class InMemoryTokenRevocationStore extends TokenRevocationStore {
       throw createError('AUTH_SESSION_NOT_REVOCABLE', 'A session id is required to revoke a session', { status: 400 });
     }
 
-    const existing = this.#revokedSessionIds.get(sessionId);
     const expiry = typeof expiresAt === 'number' ? expiresAt : undefined;
-    this.#revokedSessionIds.set(sessionId, existing === undefined || expiry === undefined ? expiry : Math.max(existing, expiry));
+    if (!this.#revokedSessionIds.has(sessionId)) {
+      this.#revokedSessionIds.set(sessionId, expiry);
+      return sessionId;
+    }
+
+    // An entry without an expiry is a permanent revocation and never expires.
+    const existing = this.#revokedSessionIds.get(sessionId);
+    this.#revokedSessionIds.set(sessionId, existing === undefined || expiry === undefined ? undefined : Math.max(existing, expiry));
     return sessionId;
   }
 

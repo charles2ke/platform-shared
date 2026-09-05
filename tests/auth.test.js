@@ -321,6 +321,13 @@ test('refreshed access tokens keep the session id and prune drops expired sessio
   revocationStore.revokeSession(payload.sid, { expiresAt: payload.exp });
   assert.equal(revocationStore.prune(now), 0);
   assert.equal(revocationStore.prune(new Date('2026-01-02T00:00:00Z')), 1);
+
+  // A permanent revocation is never downgraded to an expiring one.
+  const permanent = new InMemoryTokenRevocationStore();
+  permanent.revokeSession('session-permanent');
+  permanent.revokeSession('session-permanent', { expiresAt: 0 });
+  assert.equal(permanent.prune(new Date('2030-01-01T00:00:00Z')), 0);
+  assert.equal(permanent.isRevoked({ sid: 'session-permanent' }), true);
   assert.equal(verifyToken(accessToken, { secret, expectedUse: 'access', now, revocationStore }).sid, pair.sessionId);
 });
 
