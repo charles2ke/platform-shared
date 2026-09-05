@@ -23,14 +23,15 @@ export function createNotificationWorker(service, {
   }
 
   let timer;
-  let running = false;
+  let dispatching = false;
 
   async function runOnce(now = new Date()) {
-    if (running) {
+    if (dispatching) {
+      logger.debug?.('Skipped notification dispatch because a run is still in progress');
       return undefined;
     }
 
-    running = true;
+    dispatching = true;
     try {
       const summary = await service.dispatchScheduled({ now, principal });
       logger.debug?.('Dispatched scheduled notifications', summary);
@@ -44,13 +45,16 @@ export function createNotificationWorker(service, {
       }
       throw normalized;
     } finally {
-      running = false;
+      dispatching = false;
     }
   }
 
   return {
     runOnce,
-    isRunning: () => timer !== undefined,
+    /** True while a dispatch run is in flight. */
+    isDispatching: () => dispatching,
+    /** True once `start()` has scheduled the interval, until `stop()`. */
+    isStarted: () => timer !== undefined,
     start() {
       if (timer !== undefined) {
         return timer;

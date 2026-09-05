@@ -63,7 +63,7 @@ export class InMemoryDeadLetterQueue extends DeadLetterStore {
 
   /** Returns and clears every record, for replay through `NotificationService`. */
   async drain() {
-    const records = this.#records;
+    const records = this.#records.map((record) => ({ ...record }));
     this.#records = [];
     return records;
   }

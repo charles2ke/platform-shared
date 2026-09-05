@@ -425,5 +425,10 @@ test('enforces access policies on notification service methods', async () => {
   await assert.rejects(() => service.send(notification, { principal: worker }), { code: 'AUTH_FORBIDDEN' });
   await assert.rejects(() => service.cancelScheduled('policy-1', { principal: sender }), { code: 'AUTH_FORBIDDEN' });
   await assert.rejects(() => service.dispatchScheduled({ now: new Date('2026-01-01T00:00:00Z') }), { code: 'AUTH_PRINCIPAL_REQUIRED' });
-  assert.equal((await service.dispatchScheduled({ now: new Date('2026-01-01T00:00:00Z'), principal: worker })).processed, 1);
+  // Dispatch authorization is checked once; queued deliveries are not re-checked
+  // against the send policy for the worker principal.
+  const dispatched = await service.dispatchScheduled({ now: new Date('2026-01-01T00:00:00Z'), principal: worker });
+  assert.equal(dispatched.processed, 1);
+  assert.equal(dispatched.status, DELIVERY_STATUS.SENT);
+  assert.equal(dispatched.deadLettered, 0);
 });

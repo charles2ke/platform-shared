@@ -55,6 +55,11 @@ export class NotificationService {
 
   async send(notification, options = {}) {
     this.#enforce('notification.send', options);
+    return this.#deliver(notification);
+  }
+
+  /** Delivery without a policy check, used by already-authorized dispatch runs. */
+  async #deliver(notification) {
     const channels = normalizeChannels(notification);
     if (channels.length === 0) {
       throw createError('NOTIFICATION_CHANNEL_REQUIRED', 'At least one notification channel is required', { status: 400 });
@@ -172,7 +177,7 @@ export class NotificationService {
 
     for (const entry of dueEntries) {
       try {
-        const delivery = await this.send(entry.notification);
+        const delivery = await this.#deliver(entry.notification);
         const failedChannels = failedChannelsOf(delivery);
         const needsRetry = delivery.status === DELIVERY_STATUS.FAILED
           || (this.retryPartialFailures && delivery.status === DELIVERY_STATUS.PARTIAL && failedChannels.length > 0);

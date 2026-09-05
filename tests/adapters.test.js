@@ -130,13 +130,14 @@ test('notification worker drains due notifications on demand and on an interval'
     },
     clearIntervalImpl: () => {}
   });
-  assert.equal(worker2.isRunning(), false);
+  assert.equal(worker2.isStarted(), false);
   assert.equal(worker2.start(), 'timer');
   assert.equal(worker2.start(), 'timer');
-  assert.equal(worker2.isRunning(), true);
+  assert.equal(worker2.isStarted(), true);
+  assert.equal(worker2.isDispatching(), false);
   scheduled();
   worker2.stop();
-  assert.equal(worker2.isRunning(), false);
+  assert.equal(worker2.isStarted(), false);
 
   assert.throws(() => createNotificationWorker({}), TypeError);
 });
