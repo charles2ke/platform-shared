@@ -1,9 +1,12 @@
 import { createError } from '../shared/errors.js';
 
+/**
+ * Checks a role against `effectiveRoles` (roles expanded through registry
+ * inheritance by `resolvePrincipal()`) and falls back to the raw token roles.
+ */
 export function hasRole(principal, role) {
-  return typeof role === 'string'
-    && Array.isArray(principal?.roles)
-    && principal.roles.includes(role);
+  const roles = Array.isArray(principal?.effectiveRoles) ? principal.effectiveRoles : principal?.roles;
+  return typeof role === 'string' && Array.isArray(roles) && roles.includes(role);
 }
 
 export function hasPermission(principal, permission) {
@@ -97,6 +100,14 @@ export function createRoleRegistry(definitions = {}) {
     normalized.set(role, { permissions, inherits });
   }
 
+  function rolesForRole(role, seen = new Set()) {
+    if (seen.has(role) || !normalized.has(role)) {
+      return seen.has(role) ? [] : [role];
+    }
+    seen.add(role);
+    return [role, ...normalized.get(role).inherits.flatMap((inheritedRole) => rolesForRole(inheritedRole, seen))];
+  }
+
   function permissionsForRole(role, seen = new Set()) {
     if (seen.has(role)) {
       return [];
@@ -115,6 +126,12 @@ export function createRoleRegistry(definitions = {}) {
 
   return {
     roles: () => [...normalized.keys()],
+    /** Expands the supplied roles into themselves plus every inherited role. */
+    rolesFor(roles = []) {
+      const roleList = normalizeRequirements(roles) ?? [];
+      const seen = new Set();
+      return [...new Set(roleList.flatMap((role) => rolesForRole(role, seen)))];
+    },
     /** Resolves the effective permissions granted by the supplied roles. */
     permissionsFor(roles = []) {
       const roleList = normalizeRequirements(roles) ?? [];
@@ -125,7 +142,8 @@ export function createRoleRegistry(definitions = {}) {
 }
 
 /**
- * Expands a principal with the permissions granted by its roles.
+ * Expands a principal with the permissions granted by its roles and records the
+ * inherited roles on `effectiveRoles`, leaving the token `roles` untouched.
  * Returns the principal unchanged when no registry is supplied.
  */
 export function resolvePrincipal(principal, roleRegistry) {
@@ -136,9 +154,12 @@ export function resolvePrincipal(principal, roleRegistry) {
     throw createError('AUTH_INVALID_ROLE_REGISTRY', 'roleRegistry must implement permissionsFor()', { status: 500 });
   }
 
-  const rolePermissions = roleRegistry.permissionsFor(principal?.roles ?? []);
+  const roles = principal?.roles ?? [];
+  const rolePermissions = roleRegistry.permissionsFor(roles);
+  const effectiveRoles = typeof roleRegistry.rolesFor === 'function' ? roleRegistry.rolesFor(roles) : roles;
   return {
     ...principal,
+    effectiveRoles: [...new Set([...roles, ...effectiveRoles])],
     permissions: [...new Set([...(principal?.permissions ?? []), ...rolePermissions])]
   };
 }

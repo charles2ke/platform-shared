@@ -264,6 +264,7 @@ test('validates retry backoff configuration', () => {
 test('exposes a notification scheduler contract that requires implementations', async () => {
   assert.ok(new InMemoryNotificationScheduler() instanceof NotificationScheduler);
   await assert.rejects(() => new NotificationScheduler().dequeueDue(new Date()), { code: 'NOTIFICATION_SCHEDULER_NOT_IMPLEMENTED' });
+  await assert.rejects(() => new NotificationScheduler().cancel('id'), { code: 'NOTIFICATION_SCHEDULER_NOT_IMPLEMENTED' });
   await assert.rejects(() => new InMemoryNotificationScheduler().enqueue({}, 'not-a-date'), { code: 'NOTIFICATION_INVALID_SCHEDULE_TIME' });
 });
 
@@ -287,4 +288,48 @@ test('reports dead letters when an injected scheduler cannot requeue', async () 
   assert.equal(result.deadLettered, 1);
   assert.equal(result.pendingKnown, false);
   assert.deepEqual(deadLetters.map((entry) => entry.reason), ['scheduler-requeue-unsupported']);
+});
+
+test('lists and cancels scheduled notifications in the in-memory queue', async () => {
+  const email = new MockChannelAdapter({ channel: CHANNELS.EMAIL });
+  const service = new NotificationService({ adapters: { [CHANNELS.EMAIL]: email } });
+  const when = new Date('2026-05-01T00:00:00Z');
+
+  await service.schedule({ id: 'keep', channel: CHANNELS.EMAIL, to: { email: 'a@example.com' }, body: 'keep' }, when);
+  await service.schedule({ id: 'drop', channel: CHANNELS.EMAIL, to: { email: 'b@example.com' }, body: 'drop' }, when);
+
+  assert.deepEqual((await service.listScheduled()).map((entry) => entry.notification.id), ['keep', 'drop']);
+  assert.deepEqual(await service.cancelScheduled('drop'), { notificationId: 'drop', cancelled: 1 });
+  assert.deepEqual(await service.cancelScheduled('missing'), { notificationId: 'missing', cancelled: 0 });
+
+  const dispatched = await service.dispatchScheduled({ now: when });
+  assert.equal(dispatched.processed, 1);
+  assert.equal(email.deliveries[0].message.body, 'keep');
+  await assert.rejects(() => service.cancelScheduled(''), { code: 'NOTIFICATION_INVALID_ID' });
+});
+
+test('cancels and lists scheduled notifications through an injected scheduler', async () => {
+  const email = new MockChannelAdapter({ channel: CHANNELS.EMAIL });
+  const scheduler = new InMemoryNotificationScheduler();
+  const service = new NotificationService({ adapters: { [CHANNELS.EMAIL]: email }, scheduler });
+  const when = new Date('2026-05-01T00:00:00Z');
+
+  await service.schedule({ id: 'trip-1', channel: CHANNELS.EMAIL, to: { email: 'a@example.com' }, body: 'trip' }, when);
+  assert.deepEqual((await service.listScheduled()).map((entry) => entry.notification.id), ['trip-1']);
+  assert.deepEqual(await service.cancelScheduled('trip-1'), { notificationId: 'trip-1', cancelled: 1 });
+  assert.equal(await scheduler.countPending(), 0);
+  assert.deepEqual(await service.listScheduled(), []);
+});
+
+test('reports unsupported cancel and list operations on partial schedulers', async () => {
+  const partial = { enqueue: async () => {}, dequeueDue: async () => [] };
+  const service = new NotificationService({ adapters: {}, scheduler: partial });
+
+  await assert.rejects(() => service.cancelScheduled('trip-1'), { code: 'NOTIFICATION_CANCEL_NOT_SUPPORTED' });
+  await assert.rejects(() => service.listScheduled(), { code: 'NOTIFICATION_LIST_NOT_SUPPORTED' });
+  await assert.rejects(
+    () => new NotificationService({ adapters: {}, scheduler: { ...partial, list: async () => 'nope' } }).listScheduled(),
+    { code: 'NOTIFICATION_INVALID_SCHEDULER_RESPONSE' }
+  );
+  assert.equal(await new NotificationService({ adapters: {}, scheduler: { ...partial, cancel: async () => true } }).cancelScheduled('trip-1').then((result) => result.cancelled), 1);
 });

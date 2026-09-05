@@ -21,6 +21,10 @@ export class NotificationScheduler {
     return notImplemented('requeue');
   }
 
+  async cancel(notificationId) {
+    return notImplemented('cancel');
+  }
+
   async countPending(now) {
     return notImplemented('countPending');
   }
@@ -65,6 +69,17 @@ export class InMemoryNotificationScheduler extends NotificationScheduler {
 
   async requeue(notification, scheduledFor, attempts) {
     return this.enqueue(notification, scheduledFor, attempts);
+  }
+
+  /**
+   * Drops every pending entry for a notification id.
+   * @returns {Promise<number>} How many entries were cancelled.
+   */
+  async cancel(notificationId) {
+    const remaining = this.#entries.filter((entry) => entry.notification?.id !== notificationId);
+    const cancelled = this.#entries.length - remaining.length;
+    this.#entries = remaining;
+    return cancelled;
   }
 
   async countPending() {

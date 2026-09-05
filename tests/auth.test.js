@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { AccountStore, authorize, createAuthGuard, createRoleRegistry, getBearerToken, InMemoryAccountStore, InMemoryTokenRevocationStore, issueToken, issueTokenPair, protect, refreshAccessToken, resolvePrincipal, rotateTokenPair, TokenRevocationStore, verifyToken } from '../src/auth/index.js';
+import { AccountStore, authorize, decodeToken, describeToken, createAuthGuard, createRoleRegistry, getBearerToken, InMemoryAccountStore, InMemoryTokenRevocationStore, issueToken, issueTokenPair, protect, refreshAccessToken, resolvePrincipal, rotateTokenPair, TokenRevocationStore, verifyToken } from '../src/auth/index.js';
 
 const secret = 'test-secret-that-is-long-enough-for-hmac';
 
@@ -195,4 +195,71 @@ test('authorize throws a 403 platform error outside of route guards', () => {
   const principal = { id: 'worker', roles: ['job-runner'], permissions: ['notifications:send'] };
   assert.equal(authorize(principal, { permissions: ['notifications:send'] }), principal);
   assert.throws(() => authorize(principal, { roles: ['admin'] }), { code: 'AUTH_FORBIDDEN', status: 403 });
+});
+
+test('detects refresh token reuse and revokes every session for the subject', () => {
+  const revocationStore = new InMemoryTokenRevocationStore();
+  const reuse = [];
+  const pair = issueTokenPair({ subject: 'user-replay', roles: ['member'], secret });
+  const rotated = rotateTokenPair(pair.refreshToken, { secret, revocationStore });
+
+  assert.throws(
+    () => rotateTokenPair(pair.refreshToken, { secret, revocationStore, onReuseDetected: (event) => reuse.push(event) }),
+    { code: 'AUTH_REFRESH_TOKEN_REUSED', status: 401 }
+  );
+  assert.deepEqual(reuse.map((event) => event.subject), ['user-replay']);
+  assert.throws(
+    () => verifyToken(rotated.accessToken, { secret, expectedUse: 'access', revocationStore }),
+    { code: 'AUTH_TOKEN_REVOKED' }
+  );
+});
+
+test('keeps other sessions alive when reuse detection should not revoke the subject', () => {
+  const revocationStore = new InMemoryTokenRevocationStore();
+  const pair = issueTokenPair({ subject: 'user-scoped-replay', roles: ['member'], secret });
+  const rotated = rotateTokenPair(pair.refreshToken, { secret, revocationStore });
+
+  assert.throws(
+    () => rotateTokenPair(pair.refreshToken, { secret, revocationStore, revokeSubjectOnReuse: false }),
+    { code: 'AUTH_REFRESH_TOKEN_REUSED' }
+  );
+  assert.equal(verifyToken(rotated.accessToken, { secret, expectedUse: 'access', revocationStore }).sub, 'user-scoped-replay');
+});
+
+test('expands inherited roles onto the principal without rewriting token roles', () => {
+  const registry = createRoleRegistry({
+    member: ['profile:read'],
+    moderator: { permissions: ['post:delete'], inherits: ['member'] },
+    admin: { permissions: ['*'], inherits: ['moderator'] }
+  });
+
+  assert.deepEqual(registry.rolesFor(['admin']), ['admin', 'moderator', 'member']);
+  assert.deepEqual(registry.rolesFor(['unknown']), ['unknown']);
+  assert.deepEqual(registry.rolesFor({}), []);
+
+  const principal = resolvePrincipal({ id: 'user-1', roles: ['admin'] }, registry);
+  assert.deepEqual(principal.roles, ['admin']);
+  assert.deepEqual(principal.effectiveRoles, ['admin', 'moderator', 'member']);
+  assert.equal(authorize(principal, { roles: ['member'] }), principal);
+  assert.deepEqual(resolvePrincipal({ roles: ['admin'] }, { permissionsFor: () => [] }).effectiveRoles, ['admin']);
+});
+
+test('decodes and describes tokens for introspection', () => {
+  const issuedAt = new Date('2026-01-01T00:00:00Z');
+  const token = issueToken({ subject: 'user-describe', roles: ['member'], secret, issuer: 'platform-shared', audience: 'social', ttlSeconds: 60, now: issuedAt });
+  const { header, payload } = decodeToken(token);
+
+  assert.equal(header.alg, 'HS256');
+  assert.equal(payload.sub, 'user-describe');
+
+  const summary = describeToken(payload, { now: new Date('2026-01-01T00:00:30Z') });
+  assert.equal(summary.tokenUse, 'access');
+  assert.equal(summary.issuedAt, '2026-01-01T00:00:00.000Z');
+  assert.equal(summary.expiresAt, '2026-01-01T00:01:00.000Z');
+  assert.equal(summary.expiresInSeconds, 30);
+  assert.equal(summary.expired, false);
+  assert.equal(describeToken(payload, { now: new Date('2026-01-01T00:05:00Z') }).expired, true);
+  assert.throws(() => decodeToken('not-a-token'), { code: 'AUTH_INVALID_TOKEN' });
+  assert.throws(() => decodeToken(42), { code: 'AUTH_INVALID_TOKEN' });
+  assert.throws(() => describeToken(null), { code: 'AUTH_INVALID_TOKEN' });
 });

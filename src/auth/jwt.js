@@ -110,6 +110,48 @@ export function verifyToken(token, { secret, issuer, audience, now = new Date(),
   return payload;
 }
 
+/**
+ * Decodes a token without verifying its signature. Use only for logging,
+ * debugging, or routing decisions; never for authorization.
+ */
+export function decodeToken(token) {
+  if (typeof token !== 'string') {
+    throw createError('AUTH_INVALID_TOKEN', 'Token must be a string', { status: 401 });
+  }
+
+  const parts = token.split('.');
+  if (parts.length !== 3) {
+    throw createError('AUTH_INVALID_TOKEN', 'Token must have three segments', { status: 401 });
+  }
+
+  return { header: base64UrlJson(parts[0]), payload: base64UrlJson(parts[1]) };
+}
+
+/**
+ * Summarizes a verified token payload for session/introspection endpoints.
+ */
+export function describeToken(payload, { now = new Date() } = {}) {
+  if (!payload || typeof payload !== 'object') {
+    throw createError('AUTH_INVALID_TOKEN', 'Token payload must be an object', { status: 401 });
+  }
+
+  const currentTime = secondsNow(now);
+  const expiresInSeconds = typeof payload.exp === 'number' ? payload.exp - currentTime : undefined;
+  return {
+    subject: payload.sub,
+    tokenId: payload.jti,
+    tokenUse: payload.token_use,
+    roles: payload.roles ?? [],
+    permissions: payload.permissions ?? [],
+    issuer: payload.iss,
+    audience: payload.aud,
+    issuedAt: typeof payload.iat === 'number' ? new Date(payload.iat * 1000).toISOString() : undefined,
+    expiresAt: typeof payload.exp === 'number' ? new Date(payload.exp * 1000).toISOString() : undefined,
+    expiresInSeconds,
+    expired: expiresInSeconds !== undefined && expiresInSeconds <= 0
+  };
+}
+
 export function issueTokenPair({ subject, roles = [], permissions = [], claims = {}, secret, issuer, audience, accessTokenTtlSeconds = 900, refreshTokenTtlSeconds = 2_592_000, now = new Date() }) {
   return {
     accessToken: issueToken({ subject, roles, permissions, claims, secret, issuer, audience, ttlSeconds: accessTokenTtlSeconds, now, tokenUse: 'access' }),
@@ -126,13 +168,27 @@ export function refreshAccessToken(refreshToken, options = {}) {
  * Verifies a refresh token, revokes it when a revocation store is provided, and
  * issues a brand new access/refresh pair. Use this to implement refresh token
  * rotation so a leaked refresh token cannot be replayed after rotation.
+ *
+ * When an already-rotated (revoked) refresh token is presented again, this is
+ * treated as replay: every session for the subject is revoked (unless
+ * `revokeSubjectOnReuse` is false), the optional `onReuseDetected` hook runs,
+ * and an `AUTH_REFRESH_TOKEN_REUSED` error is thrown.
  */
 export function rotateTokenPair(refreshToken, options = {}) {
-  const payload = verifyToken(refreshToken, { ...options, expectedUse: 'refresh' });
-  const { revocationStore, roles, permissions, claims } = options;
+  const { revocationStore, roles, permissions, claims, onReuseDetected, revokeSubjectOnReuse = true } = options;
+  const payload = verifyToken(refreshToken, { ...options, revocationStore: undefined, expectedUse: 'refresh' });
   if (revocationStore !== undefined) {
-    if (typeof revocationStore.revokeToken !== 'function') {
-      throw createError('AUTH_INVALID_REVOCATION_STORE', 'revocationStore must implement revokeToken() to rotate tokens', { status: 500 });
+    if (typeof revocationStore.revokeToken !== 'function' || typeof revocationStore.isRevoked !== 'function') {
+      throw createError('AUTH_INVALID_REVOCATION_STORE', 'revocationStore must implement revokeToken() and isRevoked() to rotate tokens', { status: 500 });
+    }
+    if (revocationStore.isRevoked(payload) === true) {
+      if (revokeSubjectOnReuse && typeof revocationStore.revokeSubject === 'function') {
+        revocationStore.revokeSubject(payload.sub, { issuedBefore: options.now ?? new Date() });
+      }
+      if (typeof onReuseDetected === 'function') {
+        onReuseDetected({ subject: payload.sub, payload });
+      }
+      throw createError('AUTH_REFRESH_TOKEN_REUSED', 'Refresh token has already been used', { status: 401, details: { subject: payload.sub } });
     }
     revocationStore.revokeToken(payload);
   }
