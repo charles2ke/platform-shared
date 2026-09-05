@@ -70,15 +70,20 @@ export class InMemoryTokenRevocationStore extends TokenRevocationStore {
     return cutoff !== undefined && typeof payload.iat === 'number' && payload.iat <= cutoff;
   }
 
-  /** Drops revocation entries for tokens that already expired. */
+  /**
+   * Drops revocation entries for tokens that already expired.
+   * @returns {number} How many entries were removed.
+   */
   prune(now = new Date()) {
     const currentTime = toEpochSeconds(now);
+    let pruned = 0;
     for (const [tokenId, exp] of this.#revokedTokenIds) {
       if (exp !== undefined && exp <= currentTime) {
         this.#revokedTokenIds.delete(tokenId);
+        pruned += 1;
       }
     }
-    return this.#revokedTokenIds.size;
+    return pruned;
   }
 }
 

@@ -131,9 +131,13 @@ test('rejects revoked tokens by jti and by subject cutoff', () => {
 test('prunes expired revocation entries and validates inputs', () => {
   const revocationStore = new InMemoryTokenRevocationStore();
   const token = issueToken({ subject: 'user-prune', secret, ttlSeconds: 60 });
+  const longLivedToken = issueToken({ subject: 'user-keep', secret, ttlSeconds: 3_600 });
   revocationStore.revokeToken(verifyToken(token, { secret }));
+  revocationStore.revokeToken(verifyToken(longLivedToken, { secret }));
 
+  assert.equal(revocationStore.prune(new Date(Date.now() + 120_000)), 1);
   assert.equal(revocationStore.prune(new Date(Date.now() + 120_000)), 0);
+  assert.equal(revocationStore.isRevoked(verifyToken(longLivedToken, { secret })), true);
   assert.throws(() => revocationStore.revokeToken({}), { code: 'AUTH_TOKEN_NOT_REVOCABLE' });
   assert.throws(() => revocationStore.revokeSubject(''), { code: 'AUTH_MISSING_SUBJECT' });
   assert.throws(() => revocationStore.revokeSubject('user-1', { issuedBefore: 'not-a-date' }), { code: 'AUTH_INVALID_REVOCATION_TIME' });
