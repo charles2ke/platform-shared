@@ -23,6 +23,8 @@ export function createBasaIntegration({ jwtSecret, profileStore, adapters, revoc
     requireRefund: (request) => guard(request, { permissions: ['order:refund'] }),
     sendOrderUpdate: (order) => notifications.send(buildOrderUpdate(order)),
     scheduleOrderUpdate: (order, when) => notifications.schedule(buildOrderUpdate(order), when),
+    cancelOrderUpdate: (order) => notifications.cancelScheduled(`order-${order.id}`),
+    pendingOrderUpdates: () => notifications.listScheduled(),
     dispatchDueOrderUpdates: (now = new Date()) => notifications.dispatchScheduled({ now })
   };
 }

@@ -97,6 +97,55 @@ export class NotificationService {
     };
   }
 
+  /** Lists pending scheduled entries from the in-memory queue or injected scheduler. */
+  async listScheduled() {
+    if (!this.scheduler) {
+      return this.#scheduled.map((entry) => ({ ...entry }));
+    }
+
+    if (typeof this.scheduler.list !== 'function') {
+      throw createError('NOTIFICATION_LIST_NOT_SUPPORTED', 'Injected scheduler must implement list() for listScheduled()', { status: 500 });
+    }
+
+    const entries = await this.scheduler.list();
+    if (!Array.isArray(entries)) {
+      throw createError('NOTIFICATION_INVALID_SCHEDULER_RESPONSE', 'scheduler.list() must return an array of scheduled entries', { status: 500 });
+    }
+
+    return entries.map((entry) => normalizeScheduledEntry(entry));
+  }
+
+  /**
+   * Cancels every pending scheduled entry for a notification id, for example
+   * when a trip is cancelled or a workout is completed early.
+   * @returns {Promise<{notificationId: string, cancelled: number}>}
+   */
+  async cancelScheduled(notificationId) {
+    if (typeof notificationId !== 'string' || notificationId.length === 0) {
+      throw createError('NOTIFICATION_INVALID_ID', 'A notification id is required to cancel scheduled deliveries', { status: 400 });
+    }
+
+    if (!this.scheduler) {
+      const remaining = this.#scheduled.filter((entry) => entry.notification?.id !== notificationId);
+      const cancelled = this.#scheduled.length - remaining.length;
+      this.#scheduled = remaining;
+      return { notificationId, cancelled };
+    }
+
+    if (typeof this.scheduler.cancel !== 'function') {
+      throw createError('NOTIFICATION_CANCEL_NOT_SUPPORTED', 'Injected scheduler must implement cancel() for cancelScheduled()', { status: 500 });
+    }
+
+    const cancelled = await this.scheduler.cancel(notificationId);
+    if (typeof cancelled === 'boolean') {
+      return { notificationId, cancelled: cancelled ? 1 : 0 };
+    }
+    if (Number.isInteger(cancelled) && cancelled >= 0) {
+      return { notificationId, cancelled };
+    }
+    throw createError('NOTIFICATION_INVALID_SCHEDULER_RESPONSE', 'scheduler.cancel() must return a boolean or a non-negative integer', { status: 500 });
+  }
+
   async dispatchScheduled({ now = new Date() } = {}) {
     const nowDate = normalizeScheduleDate(now, { code: 'NOTIFICATION_INVALID_DISPATCH_TIME', message: 'Dispatch time must be a valid date value' });
     const dueEntries = await this.#loadDueEntries(nowDate);

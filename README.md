@@ -21,9 +21,12 @@ examples/          Integration stubs for social, travel, workout, and basa
 
 - Issues and verifies HMAC SHA-256 JWT access and refresh tokens.
 - Covers the full token lifecycle: `issueTokenPair()`, `refreshAccessToken()`, `rotateTokenPair()` for refresh-token rotation, and revocation through a `TokenRevocationStore`.
+- `rotateTokenPair()` detects refresh-token replay: presenting an already-rotated refresh token revokes every session for the subject (unless `revokeSubjectOnReuse: false`), invokes the optional `onReuseDetected({ subject, payload })` hook, and throws `AUTH_REFRESH_TOKEN_REUSED`.
+- `decodeToken()` inspects a token without verifying it (logging/debugging only), and `describeToken()` summarizes a verified payload (`issuedAt`, `expiresAt`, `expiresInSeconds`, `expired`) for session/introspection endpoints.
 - `InMemoryTokenRevocationStore` supports single-token revocation (`revokeToken()`), "log out everywhere" (`revokeSubject()`), and `prune()` for expired entries. Implementations must be synchronous so guards stay synchronous.
 - Provides `createAuthGuard()` and `protect()` helpers for framework-specific route wrappers. Guards accept `revocationStore` and `roleRegistry` so revocation and RBAC are enforced on every request.
 - Includes RBAC scaffolding with role and permission checks, a `createRoleRegistry()` role-to-permission map with inheritance, `resolvePrincipal()` for expanding token roles into permissions, and `authorize()` for enforcement outside route guards.
+- Role inheritance also applies to role checks: `registry.rolesFor()` expands inherited roles and `resolvePrincipal()` stores them on `principal.effectiveRoles` (token `roles` stay untouched), so a `coach` that inherits `athlete` satisfies `{ roles: ['athlete'] }`.
 - Exposes an `AccountStore` interface plus an `InMemoryAccountStore` default that can be replaced by persistent adapters later.
 
 ### Profile
@@ -46,6 +49,7 @@ examples/          Integration stubs for social, travel, workout, and basa
 - `dispatchScheduled()` returns `pending` plus `pendingKnown`; when an injected scheduler does not expose `countPending()`, `pending` is `0` and `pendingKnown` is `false`.
 - In-memory retries honor `maxScheduleAttempts` and `retryDelayMs`; injected schedulers can support retries by implementing `requeue()`.
 - `maxScheduleAttempts` bounds total delivery attempts (initial attempt included). Scheduler adapters should return wrapped due entries as `{ notification, scheduledFor }` (or `{ notification, when }`).
+- `listScheduled()` returns pending entries and `cancelScheduled(notificationId)` drops queued deliveries (trip cancelled, workout completed early); injected schedulers must implement `list()` and `cancel()` for these.
 - Defines a `ChannelAdapter` interface and ships `MockChannelAdapter` for default/local provider behavior.
 
 ### Shared
@@ -102,6 +106,7 @@ const principal = guard(request, { permissions: ['profile:read'] });
 import {
   createAuthGuard,
   createRoleRegistry,
+  describeToken,
   InMemoryTokenRevocationStore,
   rotateTokenPair
 } from '@charles2ke/platform-shared/auth';
@@ -114,8 +119,21 @@ const roleRegistry = createRoleRegistry({
 
 const guard = createAuthGuard({ secret, issuer: 'platform-shared', audience: 'social', revocationStore, roleRegistry });
 
-// Refresh endpoint: rotate the pair and revoke the presented refresh token.
-const rotated = rotateTokenPair(refreshToken, { secret, issuer: 'platform-shared', audience: 'social', revocationStore });
+// Refresh endpoint: rotate the pair, revoke the presented refresh token, and
+// treat a replayed refresh token as a compromise (all sessions are revoked).
+const rotated = rotateTokenPair(refreshToken, {
+  secret,
+  issuer: 'platform-shared',
+  audience: 'social',
+  revocationStore,
+  onReuseDetected: ({ subject }) => securityLog.warn('refresh token replay', { subject })
+});
+
+// Session/introspection endpoint.
+const session = describeToken(principal.claims); // { expiresAt, expiresInSeconds, expired, ... }
+
+// Inherited roles are available on principal.effectiveRoles.
+guard(request, { roles: ['member'] });
 
 // Logout endpoints.
 revocationStore.revokeToken(principal.claims);
@@ -198,6 +216,10 @@ await notifications.schedule(reminder, new Date(Date.now() + 60_000));
 
 // Cron/worker loop
 const { processed, retried, deadLettered, pending } = await notifications.dispatchScheduled();
+
+// Cancel queued deliveries when the underlying event changes.
+await notifications.listScheduled();
+await notifications.cancelScheduled(reminder.id);
 ```
 
 ## Downstream integration approach
@@ -212,10 +234,10 @@ See `examples/social.js`, `examples/travel.js`, `examples/workout.js`, and `exam
 
 | Example | Shows |
 | --- | --- |
-| `social.js` | Login, guarded routes, refresh-token rotation, single-session and global logout, role registry. |
-| `workout.js` | Role-derived permissions, `authorize()` in service code, scheduled push nudges with exponential backoff and dead lettering. |
-| `travel.js` | Immediate and scheduled multi-channel reminders drained by a worker loop. |
-| `basa.js` | RBAC-guarded order operations, profile CRUD, and scheduled email/SMS order updates. |
+| `social.js` | Login, guarded routes, refresh-token rotation with replay detection, session introspection, single-session and global logout, role registry. |
+| `workout.js` | Role-derived and inherited-role permissions, `authorize()` in service code, scheduled push nudges with exponential backoff, cancellation, and dead lettering. |
+| `travel.js` | Immediate and scheduled multi-channel reminders drained by a worker loop, plus pending listing and cancellation. |
+| `basa.js` | RBAC-guarded order operations, profile CRUD, and scheduled email/SMS order updates with pending listing and cancellation. |
 
 ## Migration/adoption checklist
 

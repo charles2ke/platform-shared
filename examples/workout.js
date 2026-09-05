@@ -41,6 +41,9 @@ export function createWorkoutIntegration({ jwtSecret, adapters, revocationStore 
         variables: workout
       }, when);
     },
+    // Coaches inherit the athlete role, so inherited role checks work too.
+    requireAthlete: (request) => guard(request, { roles: ['athlete'] }),
+    cancelWorkoutNudge: (workout) => notifications.cancelScheduled(`workout-${workout.id}`),
     dispatchDueNudges: (now = new Date()) => notifications.dispatchScheduled({ now })
   };
 }

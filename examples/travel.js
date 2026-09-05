@@ -18,7 +18,10 @@ export function createTravelNotifications({ adapters, scheduler = new InMemoryNo
     scheduler,
     sendTripReminder: (traveler, trip) => notifications.send(buildReminder(traveler, trip)),
     scheduleTripReminder: (traveler, trip, when) => notifications.schedule(buildReminder(traveler, trip), when),
-    dispatchDueReminders: (now = new Date()) => notifications.dispatchScheduled({ now })
+    dispatchDueReminders: (now = new Date()) => notifications.dispatchScheduled({ now }),
+    // Trip cancelled or rebooked: drop any reminders still waiting in the queue.
+    cancelTripReminder: (trip) => notifications.cancelScheduled(`trip-${trip.id}`),
+    listPendingReminders: () => notifications.listScheduled()
   };
 }
 

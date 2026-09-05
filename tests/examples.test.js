@@ -80,3 +80,51 @@ test('basa example guards refunds and schedules order updates', async () => {
   assert.equal(dispatched.status, DELIVERY_STATUS.SENT);
   assert.equal(sms.deliveries[0].message.body, 'Your order status is shipped.');
 });
+
+test('social example reports sessions and blocks refresh token replay', () => {
+  const social = createSocialPlatform({ jwtSecret });
+  const tokens = social.login({ id: 'user-2', roles: ['member'] });
+  const session = social.session(tokens.accessToken);
+
+  assert.equal(session.subject, 'user-2');
+  assert.equal(session.tokenUse, 'access');
+  assert.equal(session.expired, false);
+
+  const rotated = social.refresh(tokens.refreshToken);
+  assert.throws(() => social.refresh(tokens.refreshToken), { code: 'AUTH_REFRESH_TOKEN_REUSED' });
+  assert.deepEqual(social.reuseEvents.map((event) => event.subject), ['user-2']);
+  assert.throws(() => social.requireMember(bearer(rotated.accessToken)), { code: 'AUTH_TOKEN_REVOKED' });
+});
+
+test('workout example honors inherited roles and cancels queued nudges', async () => {
+  const push = new MockChannelAdapter({ channel: CHANNELS.PUSH });
+  const workout = createWorkoutIntegration({ jwtSecret, adapters: { push } });
+  const coachToken = createSocialPlatform({ jwtSecret }).login({ id: 'coach-2', roles: ['coach'] }).accessToken;
+
+  assert.equal(workout.requireAthlete(bearer(coachToken)).id, 'coach-2');
+
+  const when = new Date('2026-06-01T00:00:00Z');
+  await workout.scheduleWorkoutNudge({ id: 'user-2' }, { id: 'w-2', name: 'Core' }, when);
+  assert.deepEqual(await workout.cancelWorkoutNudge({ id: 'w-2' }), { notificationId: 'workout-w-2', cancelled: 1 });
+  assert.equal((await workout.dispatchDueNudges(when)).processed, 0);
+  assert.equal(push.deliveries.length, 0);
+});
+
+test('travel and basa examples expose pending queues and cancellation', async () => {
+  const email = new MockChannelAdapter({ channel: CHANNELS.EMAIL });
+  const sms = new MockChannelAdapter({ channel: CHANNELS.SMS });
+  const push = new MockChannelAdapter({ channel: CHANNELS.PUSH });
+  const travel = createTravelNotifications({ adapters: { email, push } });
+  const basa = createBasaIntegration({ jwtSecret, adapters: { email, sms } });
+  const when = new Date('2026-07-01T00:00:00Z');
+
+  await travel.scheduleTripReminder({ id: 'user-3', email: 'user@example.com' }, { id: 't-2', destination: 'Mombasa', startsAt: 'Friday' }, when);
+  assert.deepEqual((await travel.listPendingReminders()).map((entry) => entry.notification.id), ['trip-t-2']);
+  assert.deepEqual(await travel.cancelTripReminder({ id: 't-2' }), { notificationId: 'trip-t-2', cancelled: 1 });
+  assert.deepEqual(await travel.listPendingReminders(), []);
+
+  await basa.scheduleOrderUpdate({ id: 'o-2', email: 'customer@example.com', phone: '+254700000001', status: 'delayed' }, when);
+  assert.deepEqual((await basa.pendingOrderUpdates()).map((entry) => entry.notification.id), ['order-o-2']);
+  assert.deepEqual(await basa.cancelOrderUpdate({ id: 'o-2' }), { notificationId: 'order-o-2', cancelled: 1 });
+  assert.equal((await basa.dispatchDueOrderUpdates(when)).processed, 0);
+});
