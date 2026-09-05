@@ -12,6 +12,10 @@ export function hasPermission(principal, permission) {
   return principal.permissions.some((grantedPermission) => permissionMatches(grantedPermission, permission));
 }
 
+/**
+ * Returns true when role/permission requirements are satisfied.
+ * Invalid requirement shapes fail closed and return false.
+ */
 export function meetsRequirements(principal, { roles = [], permissions = [], requireAllRoles = false, requireAllPermissions = true } = {}) {
   const normalizedRoles = normalizeRequirements(roles);
   const normalizedPermissions = normalizeRequirements(permissions);
