@@ -135,7 +135,12 @@ export function describeToken(payload, { now = new Date() } = {}) {
     throw createError('AUTH_INVALID_TOKEN', 'Token payload must be an object', { status: 401 });
   }
 
-  const currentTime = secondsNow(now);
+  const currentDate = now instanceof Date ? now : new Date(now);
+  if (!(currentDate instanceof Date) || Number.isNaN(currentDate.getTime())) {
+    throw createError('AUTH_INVALID_TOKEN', 'now must be a valid date', { status: 401 });
+  }
+
+  const currentTime = secondsNow(currentDate);
   const expiresInSeconds = typeof payload.exp === 'number' ? payload.exp - currentTime : undefined;
   return {
     subject: payload.sub,

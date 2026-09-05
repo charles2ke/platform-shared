@@ -258,7 +258,9 @@ test('decodes and describes tokens for introspection', () => {
   assert.equal(summary.expiresAt, '2026-01-01T00:01:00.000Z');
   assert.equal(summary.expiresInSeconds, 30);
   assert.equal(summary.expired, false);
+  assert.equal(describeToken(payload, { now: '2026-01-01T00:00:30Z' }).expiresInSeconds, 30);
   assert.equal(describeToken(payload, { now: new Date('2026-01-01T00:05:00Z') }).expired, true);
+  assert.throws(() => describeToken(payload, { now: 'invalid-date' }), { code: 'AUTH_INVALID_TOKEN' });
   assert.throws(() => decodeToken('not-a-token'), { code: 'AUTH_INVALID_TOKEN' });
   assert.throws(() => decodeToken(42), { code: 'AUTH_INVALID_TOKEN' });
   assert.throws(() => describeToken(null), { code: 'AUTH_INVALID_TOKEN' });
