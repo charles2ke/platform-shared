@@ -60,7 +60,10 @@ export class NotificationService {
   async schedule(notification, when) {
     const scheduledFor = normalizeScheduleDate(when);
 
-    if (this.scheduler?.enqueue) {
+    if (this.scheduler) {
+      if (typeof this.scheduler.enqueue !== 'function') {
+        throw createError('NOTIFICATION_SCHEDULE_NOT_SUPPORTED', 'Injected scheduler must implement enqueue() for schedule()', { status: 500 });
+      }
       await this.scheduler.enqueue(notification, scheduledFor);
     } else {
       this.#scheduled.push({ notification, scheduledFor: scheduledFor.toISOString(), attempts: 0 });

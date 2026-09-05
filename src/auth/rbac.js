@@ -15,6 +15,9 @@ export function hasPermission(principal, permission) {
 export function meetsRequirements(principal, { roles = [], permissions = [], requireAllRoles = false, requireAllPermissions = true } = {}) {
   const normalizedRoles = normalizeRequirements(roles);
   const normalizedPermissions = normalizeRequirements(permissions);
+  if (normalizedRoles === undefined || normalizedPermissions === undefined) {
+    return false;
+  }
   const roleCheck = normalizedRoles.length === 0 || (requireAllRoles ? normalizedRoles.every((role) => hasRole(principal, role)) : normalizedRoles.some((role) => hasRole(principal, role)));
   const permissionCheck = normalizedPermissions.length === 0
     || (requireAllPermissions
@@ -29,7 +32,7 @@ function normalizeRequirements(value) {
   }
 
   if (!Array.isArray(value)) {
-    return [];
+    return undefined;
   }
 
   return value.filter((item) => typeof item === 'string' && item.length > 0);

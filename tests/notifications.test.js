@@ -113,6 +113,14 @@ test('requires dequeueDue when dispatching with an injected scheduler', async ()
   );
 });
 
+test('requires enqueue when scheduling with an injected scheduler', async () => {
+  const service = new NotificationService({ scheduler: { dequeueDue: async () => [] } });
+  await assert.rejects(
+    () => service.schedule({ id: 'notification-scheduler-no-enqueue', channel: CHANNELS.EMAIL, body: 'Later' }, '2026-01-15T00:00:00.000Z'),
+    (error) => error.code === 'NOTIFICATION_SCHEDULE_NOT_SUPPORTED' && error.status === 500
+  );
+});
+
 test('dispatches scheduler-provided entries and uses scheduler retry hooks', async () => {
   const sms = new MockChannelAdapter({ channel: CHANNELS.SMS, fail: true });
   const requeueCalls = [];
@@ -168,13 +176,18 @@ test('re-queues failed in-memory scheduled deliveries for retry', async () => {
   assert.equal(firstDispatch.results[0].notificationId, 'notification-retry');
 
   const secondDispatch = await service.dispatchScheduled({ now: '2026-01-03T00:00:00.000Z' });
+  assert.equal(secondDispatch.status, DELIVERY_STATUS.FAILED);
   assert.equal(secondDispatch.processed, 1);
   assert.equal(secondDispatch.pending, 1);
   assert.equal(secondDispatch.results[0].notificationId, 'notification-retry');
+  assert.equal(secondDispatch.results[0].delivery.status, DELIVERY_STATUS.FAILED);
 
   const thirdDispatch = await service.dispatchScheduled({ now: '2026-01-04T00:00:00.000Z' });
+  assert.equal(thirdDispatch.status, DELIVERY_STATUS.FAILED);
   assert.equal(thirdDispatch.processed, 1);
   assert.equal(thirdDispatch.pending, 0);
+  assert.equal(thirdDispatch.results[0].notificationId, 'notification-retry');
+  assert.equal(thirdDispatch.results[0].delivery.status, DELIVERY_STATUS.FAILED);
 });
 
 test('rejects invalid maxScheduleAttempts configuration', () => {
