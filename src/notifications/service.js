@@ -34,7 +34,8 @@ export class NotificationService {
 
   /** Delay in milliseconds before the retry that follows `attempts` failures. */
   retryDelayFor(attempts) {
-    const exponent = Math.max(0, attempts - 1);
+    const normalizedAttempts = Number.isFinite(attempts) ? Math.max(1, Math.floor(attempts)) : 1;
+    const exponent = normalizedAttempts - 1;
     const delay = Math.round(this.retryDelayMs * this.retryBackoffFactor ** exponent);
     return this.maxRetryDelayMs === undefined ? delay : Math.min(delay, this.maxRetryDelayMs);
   }
