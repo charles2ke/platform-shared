@@ -1,3 +1,5 @@
+import { createError } from '../shared/errors.js';
+
 export function hasRole(principal, role) {
   return typeof role === 'string'
     && Array.isArray(principal?.roles)
@@ -72,4 +74,83 @@ function permissionMatches(grantedPermission, requiredPermission) {
   }
 
   return false;
+}
+
+/**
+ * Builds a role -> permission registry so downstream apps can keep tokens small
+ * and enforce permissions from roles. Roles may inherit other roles.
+ *
+ * @param {Record<string, string[]|{permissions?: string[], inherits?: string[]}>} definitions
+ */
+export function createRoleRegistry(definitions = {}) {
+  if (definitions === null || typeof definitions !== 'object' || Array.isArray(definitions)) {
+    throw createError('AUTH_INVALID_ROLE_REGISTRY', 'Role registry definitions must be an object', { status: 500 });
+  }
+
+  const normalized = new Map();
+  for (const [role, definition] of Object.entries(definitions)) {
+    const permissions = Array.isArray(definition) ? definition : definition?.permissions ?? [];
+    const inherits = Array.isArray(definition) ? [] : definition?.inherits ?? [];
+    if (normalizeRequirements(permissions) === undefined || normalizeRequirements(inherits) === undefined) {
+      throw createError('AUTH_INVALID_ROLE_REGISTRY', `Role "${role}" must define permissions and inherits as string arrays`, { status: 500 });
+    }
+    normalized.set(role, { permissions, inherits });
+  }
+
+  function permissionsForRole(role, seen = new Set()) {
+    if (seen.has(role)) {
+      return [];
+    }
+    seen.add(role);
+    const definition = normalized.get(role);
+    if (!definition) {
+      return [];
+    }
+
+    return [
+      ...definition.permissions,
+      ...definition.inherits.flatMap((inheritedRole) => permissionsForRole(inheritedRole, seen))
+    ];
+  }
+
+  return {
+    roles: () => [...normalized.keys()],
+    /** Resolves the effective permissions granted by the supplied roles. */
+    permissionsFor(roles = []) {
+      const roleList = normalizeRequirements(roles) ?? [];
+      const seen = new Set();
+      return [...new Set(roleList.flatMap((role) => permissionsForRole(role, seen)))];
+    }
+  };
+}
+
+/**
+ * Expands a principal with the permissions granted by its roles.
+ * Returns the principal unchanged when no registry is supplied.
+ */
+export function resolvePrincipal(principal, roleRegistry) {
+  if (!roleRegistry) {
+    return principal;
+  }
+  if (typeof roleRegistry.permissionsFor !== 'function') {
+    throw createError('AUTH_INVALID_ROLE_REGISTRY', 'roleRegistry must implement permissionsFor()', { status: 500 });
+  }
+
+  const rolePermissions = roleRegistry.permissionsFor(principal?.roles ?? []);
+  return {
+    ...principal,
+    permissions: [...new Set([...(principal?.permissions ?? []), ...rolePermissions])]
+  };
+}
+
+/**
+ * Enforces requirements outside of route guards (jobs, queue consumers, RPC).
+ * Throws a 403 PlatformError when the principal is not authorized.
+ */
+export function authorize(principal, requirements = {}) {
+  if (!meetsRequirements(principal, requirements)) {
+    throw createError('AUTH_FORBIDDEN', 'Principal does not have required access', { status: 403, details: requirements });
+  }
+
+  return principal;
 }

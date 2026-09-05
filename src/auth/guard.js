@@ -1,7 +1,7 @@
 import { createError } from '../shared/errors.js';
 import { noopLogger } from '../shared/logger.js';
 import { verifyToken } from './jwt.js';
-import { meetsRequirements } from './rbac.js';
+import { authorize, resolvePrincipal } from './rbac.js';
 
 export function getBearerToken(request) {
   const headers = request?.headers;
@@ -20,27 +20,27 @@ export function getBearerToken(request) {
   return /^Bearer$/i.test(scheme) && token ? token : undefined;
 }
 
-export function createAuthGuard({ secret, issuer, audience, logger = noopLogger } = {}) {
+export function createAuthGuard({ secret, issuer, audience, logger = noopLogger, revocationStore, roleRegistry, clockToleranceSeconds = 0 } = {}) {
   return function guard(request, requirements = {}) {
     const token = getBearerToken(request);
     if (!token) {
       throw createError('AUTH_MISSING_TOKEN', 'Access token is required', { status: 401 });
     }
 
-    const payload = verifyToken(token, { secret, issuer, audience, expectedUse: 'access' });
-    const principal = {
+    const payload = verifyToken(token, { secret, issuer, audience, expectedUse: 'access', revocationStore, clockToleranceSeconds });
+    const principal = resolvePrincipal({
       id: payload.sub,
       roles: payload.roles ?? [],
       permissions: payload.permissions ?? [],
       claims: payload
-    };
+    }, roleRegistry);
 
-    if (!meetsRequirements(principal, requirements)) {
+    try {
+      return authorize(principal, requirements);
+    } catch (error) {
       logger.warn('Authorization failed', { subject: principal.id, requirements });
-      throw createError('AUTH_FORBIDDEN', 'Principal does not have required access', { status: 403, details: requirements });
+      throw error;
     }
-
-    return principal;
   };
 }
 

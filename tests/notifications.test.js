@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { CHANNELS, ChannelAdapter, DELIVERY_STATUS, MockChannelAdapter, NotificationService, renderTemplate } from '../src/notifications/index.js';
+import { CHANNELS, ChannelAdapter, DELIVERY_STATUS, InMemoryNotificationScheduler, MockChannelAdapter, NotificationScheduler, NotificationService, renderTemplate } from '../src/notifications/index.js';
 
 test('renders notification template variables', () => {
   assert.equal(renderTemplate('Hello {{ user.name }}', { user: { name: 'Charles' } }), 'Hello Charles');
@@ -208,4 +208,83 @@ test('exposes a channel adapter contract that requires implementations', async (
   const adapter = new ChannelAdapter({ channel: CHANNELS.SMS });
   assert.ok(new MockChannelAdapter({ channel: CHANNELS.SMS }) instanceof ChannelAdapter);
   await assert.rejects(() => adapter.send({ body: 'hi' }), { code: 'NOTIFICATION_ADAPTER_NOT_IMPLEMENTED' });
+});
+
+test('in-memory scheduler drains due entries and retries failures with backoff', async () => {
+  const push = new MockChannelAdapter({ channel: CHANNELS.PUSH, fail: true });
+  const scheduler = new InMemoryNotificationScheduler();
+  const deadLetters = [];
+  const service = new NotificationService({
+    adapters: { push },
+    scheduler,
+    maxScheduleAttempts: 3,
+    retryDelayMs: 1_000,
+    retryBackoffFactor: 2,
+    onDeadLetter: (entry) => deadLetters.push(entry)
+  });
+
+  const scheduledFor = new Date('2026-01-01T00:00:00Z');
+  await service.schedule({ id: 'push-1', channel: CHANNELS.PUSH, to: { userId: 'user-1' }, body: 'Go' }, scheduledFor);
+  assert.equal(await scheduler.countPending(), 1);
+
+  const first = await service.dispatchScheduled({ now: scheduledFor });
+  assert.equal(first.status, DELIVERY_STATUS.FAILED);
+  assert.equal(first.retried, 1);
+  assert.equal(first.deadLettered, 0);
+  assert.equal(first.results[0].attempts, 1);
+  assert.equal(first.results[0].retryScheduledFor, new Date('2026-01-01T00:00:01Z').toISOString());
+  assert.equal(first.pending, 1);
+  assert.equal(first.pendingKnown, true);
+
+  const second = await service.dispatchScheduled({ now: new Date('2026-01-01T00:00:01Z') });
+  assert.equal(second.results[0].attempts, 2);
+  assert.equal(second.results[0].retryScheduledFor, new Date('2026-01-01T00:00:03Z').toISOString());
+
+  const third = await service.dispatchScheduled({ now: new Date('2026-01-01T00:00:03Z') });
+  assert.equal(third.results[0].deadLettered, true);
+  assert.equal(third.deadLettered, 1);
+  assert.equal(await scheduler.countPending(), 0);
+  assert.deepEqual(deadLetters.map((entry) => entry.reason), ['retry-limit-reached']);
+  assert.deepEqual(await scheduler.list(), []);
+});
+
+test('caps retry delays at maxRetryDelayMs', () => {
+  const service = new NotificationService({ retryDelayMs: 1_000, retryBackoffFactor: 10, maxRetryDelayMs: 5_000 });
+  assert.equal(service.retryDelayFor(1), 1_000);
+  assert.equal(service.retryDelayFor(2), 5_000);
+  assert.equal(service.retryDelayFor(0), 1_000);
+});
+
+test('validates retry backoff configuration', () => {
+  assert.throws(() => new NotificationService({ retryBackoffFactor: 0 }), { code: 'NOTIFICATION_INVALID_RETRY_BACKOFF' });
+  assert.throws(() => new NotificationService({ maxRetryDelayMs: -1 }), { code: 'NOTIFICATION_INVALID_MAX_RETRY_DELAY' });
+  assert.throws(() => new NotificationService({ onDeadLetter: 'nope' }), { code: 'NOTIFICATION_INVALID_DEAD_LETTER_HANDLER' });
+});
+
+test('exposes a notification scheduler contract that requires implementations', async () => {
+  assert.ok(new InMemoryNotificationScheduler() instanceof NotificationScheduler);
+  await assert.rejects(() => new NotificationScheduler().dequeueDue(new Date()), { code: 'NOTIFICATION_SCHEDULER_NOT_IMPLEMENTED' });
+  await assert.rejects(() => new InMemoryNotificationScheduler().enqueue({}, 'not-a-date'), { code: 'NOTIFICATION_INVALID_SCHEDULE_TIME' });
+});
+
+test('reports dead letters when an injected scheduler cannot requeue', async () => {
+  const push = new MockChannelAdapter({ channel: CHANNELS.PUSH, fail: true });
+  const entries = [];
+  const deadLetters = [];
+  const scheduler = {
+    async enqueue(notification, scheduledFor) {
+      entries.push({ notification, scheduledFor });
+    },
+    async dequeueDue() {
+      return entries.splice(0, entries.length);
+    }
+  };
+  const service = new NotificationService({ adapters: { push }, scheduler, onDeadLetter: (entry) => deadLetters.push(entry) });
+
+  await service.schedule({ id: 'push-2', channel: CHANNELS.PUSH, body: 'Go' }, new Date('2026-01-01T00:00:00Z'));
+  const result = await service.dispatchScheduled({ now: new Date('2026-01-01T00:00:00Z') });
+
+  assert.equal(result.deadLettered, 1);
+  assert.equal(result.pendingKnown, false);
+  assert.deepEqual(deadLetters.map((entry) => entry.reason), ['scheduler-requeue-unsupported']);
 });

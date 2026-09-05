@@ -56,7 +56,7 @@ export function issueToken({ subject, roles = [], permissions = [], claims = {},
   return `${signingInput}.${sign(signingInput, secret)}`;
 }
 
-export function verifyToken(token, { secret, issuer, audience, now = new Date(), clockToleranceSeconds = 0, expectedUse } = {}) {
+export function verifyToken(token, { secret, issuer, audience, now = new Date(), clockToleranceSeconds = 0, expectedUse, revocationStore } = {}) {
   assertSecret(secret);
   if (typeof token !== 'string') {
     throw createError('AUTH_INVALID_TOKEN', 'Token must be a string', { status: 401 });
@@ -98,6 +98,14 @@ export function verifyToken(token, { secret, issuer, audience, now = new Date(),
   if (expectedUse !== undefined && payload.token_use !== expectedUse) {
     throw createError('AUTH_INVALID_TOKEN_USE', 'Token use is invalid', { status: 401 });
   }
+  if (revocationStore !== undefined) {
+    if (typeof revocationStore.isRevoked !== 'function') {
+      throw createError('AUTH_INVALID_REVOCATION_STORE', 'revocationStore must implement a synchronous isRevoked()', { status: 500 });
+    }
+    if (revocationStore.isRevoked(payload) === true) {
+      throw createError('AUTH_TOKEN_REVOKED', 'Token has been revoked', { status: 401 });
+    }
+  }
 
   return payload;
 }
@@ -111,6 +119,41 @@ export function issueTokenPair({ subject, roles = [], permissions = [], claims =
 
 export function refreshAccessToken(refreshToken, options = {}) {
   const payload = verifyToken(refreshToken, { ...options, expectedUse: 'refresh' });
+  return issueAccessTokenFromRefreshPayload(payload, options);
+}
+
+/**
+ * Verifies a refresh token, revokes it when a revocation store is provided, and
+ * issues a brand new access/refresh pair. Use this to implement refresh token
+ * rotation so a leaked refresh token cannot be replayed after rotation.
+ */
+export function rotateTokenPair(refreshToken, options = {}) {
+  const payload = verifyToken(refreshToken, { ...options, expectedUse: 'refresh' });
+  const { revocationStore, roles, permissions, claims } = options;
+  if (revocationStore !== undefined) {
+    if (typeof revocationStore.revokeToken !== 'function') {
+      throw createError('AUTH_INVALID_REVOCATION_STORE', 'revocationStore must implement revokeToken() to rotate tokens', { status: 500 });
+    }
+    revocationStore.revokeToken(payload);
+  }
+
+  const pair = issueTokenPair({
+    subject: payload.sub,
+    roles: roles ?? payload.roles ?? [],
+    permissions: permissions ?? payload.permissions ?? [],
+    claims: claims ?? {},
+    secret: options.secret,
+    issuer: options.issuer,
+    audience: options.audience,
+    accessTokenTtlSeconds: options.accessTokenTtlSeconds ?? 900,
+    refreshTokenTtlSeconds: options.refreshTokenTtlSeconds ?? 2_592_000,
+    now: options.now
+  });
+
+  return { ...pair, rotatedFrom: payload };
+}
+
+function issueAccessTokenFromRefreshPayload(payload, options) {
   return issueToken({
     subject: payload.sub,
     roles: payload.roles ?? [],
