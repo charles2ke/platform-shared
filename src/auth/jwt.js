@@ -145,6 +145,7 @@ export function describeToken(payload, { now = new Date() } = {}) {
   return {
     subject: payload.sub,
     tokenId: payload.jti,
+    sessionId: payload.sid,
     tokenUse: payload.token_use,
     roles: payload.roles ?? [],
     permissions: payload.permissions ?? [],
@@ -157,10 +158,17 @@ export function describeToken(payload, { now = new Date() } = {}) {
   };
 }
 
-export function issueTokenPair({ subject, roles = [], permissions = [], claims = {}, secret, issuer, audience, accessTokenTtlSeconds = 900, refreshTokenTtlSeconds = 2_592_000, now = new Date() }) {
+/**
+ * Issues an access/refresh pair that share a session id (`sid`) claim so both
+ * tokens can be revoked together on logout or refresh-token replay.
+ */
+export function issueTokenPair({ subject, roles = [], permissions = [], claims = {}, secret, issuer, audience, accessTokenTtlSeconds = 900, refreshTokenTtlSeconds = 2_592_000, now = new Date(), sessionId }) {
+  const session = sessionId ?? claims.sid ?? randomUUID();
+  const sharedClaims = { ...claims, sid: session };
   return {
-    accessToken: issueToken({ subject, roles, permissions, claims, secret, issuer, audience, ttlSeconds: accessTokenTtlSeconds, now, tokenUse: 'access' }),
-    refreshToken: issueToken({ subject, roles, permissions, claims, secret, issuer, audience, ttlSeconds: refreshTokenTtlSeconds, now, tokenUse: 'refresh' })
+    sessionId: session,
+    accessToken: issueToken({ subject, roles, permissions, claims: { ...sharedClaims, jti: undefined }, secret, issuer, audience, ttlSeconds: accessTokenTtlSeconds, now, tokenUse: 'access' }),
+    refreshToken: issueToken({ subject, roles, permissions, claims: { ...sharedClaims, jti: undefined }, secret, issuer, audience, ttlSeconds: refreshTokenTtlSeconds, now, tokenUse: 'refresh' })
   };
 }
 
@@ -174,8 +182,12 @@ export function refreshAccessToken(refreshToken, options = {}) {
  * issues a brand new access/refresh pair. Use this to implement refresh token
  * rotation so a leaked refresh token cannot be replayed after rotation.
  *
+ * Each rotation starts a new session id (`sid`) unless `sessionId` is supplied,
+ * so the newly issued access/refresh pair can be revoked as one unit.
+ *
  * When an already-rotated (revoked) refresh token is presented again, this is
- * treated as replay: every session for the subject is revoked (unless
+ * treated as replay: the replayed session is revoked so its access token stops
+ * verifying, every session for the subject is revoked (unless
  * `revokeSubjectOnReuse` is false), the optional `onReuseDetected` hook runs,
  * and an `AUTH_REFRESH_TOKEN_REUSED` error is thrown.
  */
@@ -187,11 +199,14 @@ export function rotateTokenPair(refreshToken, options = {}) {
       throw createError('AUTH_INVALID_REVOCATION_STORE', 'revocationStore must implement revokeToken() and isRevoked() to rotate tokens', { status: 500 });
     }
     if (revocationStore.isRevoked(payload)) {
+      if (typeof payload.sid === 'string' && typeof revocationStore.revokeSession === 'function') {
+        revocationStore.revokeSession(payload.sid);
+      }
       if (revokeSubjectOnReuse && typeof revocationStore.revokeSubject === 'function') {
         revocationStore.revokeSubject(payload.sub, { issuedBefore: options.now ?? new Date() });
       }
       if (typeof onReuseDetected === 'function') {
-        onReuseDetected({ subject: payload.sub, payload });
+        onReuseDetected({ subject: payload.sub, sessionId: payload.sid, payload });
       }
       throw createError('AUTH_REFRESH_TOKEN_REUSED', 'Refresh token has already been used', { status: 401, details: { subject: payload.sub } });
     }
@@ -208,10 +223,39 @@ export function rotateTokenPair(refreshToken, options = {}) {
     audience: options.audience,
     accessTokenTtlSeconds: options.accessTokenTtlSeconds ?? 900,
     refreshTokenTtlSeconds: options.refreshTokenTtlSeconds ?? 2_592_000,
-    now: options.now
+    now: options.now,
+    sessionId: options.sessionId
   });
 
   return { ...pair, rotatedFrom: payload };
+}
+
+/**
+ * Ends a session (logout) by revoking its `sid` when present, so the access
+ * token and the refresh token issued together stop verifying at once. Falls
+ * back to single-token revocation for tokens issued without a session id.
+ *
+ * @param {{sid?: string, jti?: string, exp?: number}} payload A verified token payload.
+ * @param {{revocationStore: {revokeSession?: Function, revokeToken: Function}}} options
+ * @returns {{sessionId?: string, tokenId?: string}} What was revoked.
+ */
+export function revokeSession(payload, { revocationStore } = {}) {
+  if (!payload || typeof payload !== 'object') {
+    throw createError('AUTH_INVALID_TOKEN', 'Token payload must be an object', { status: 401 });
+  }
+  if (!revocationStore || typeof revocationStore.revokeToken !== 'function') {
+    throw createError('AUTH_INVALID_REVOCATION_STORE', 'revocationStore must implement revokeToken() to end a session', { status: 500 });
+  }
+
+  if (typeof payload.sid === 'string' && payload.sid.length > 0 && typeof revocationStore.revokeSession === 'function') {
+    revocationStore.revokeSession(
+      payload.sid,
+      payload.token_use === 'refresh' ? { expiresAt: payload.exp } : undefined
+    );
+    return { sessionId: payload.sid };
+  }
+
+  return { tokenId: revocationStore.revokeToken(payload) };
 }
 
 function issueAccessTokenFromRefreshPayload(payload, options) {
@@ -219,6 +263,7 @@ function issueAccessTokenFromRefreshPayload(payload, options) {
     subject: payload.sub,
     roles: payload.roles ?? [],
     permissions: payload.permissions ?? [],
+    claims: typeof payload.sid === 'string' ? { sid: payload.sid } : {},
     secret: options.secret,
     issuer: options.issuer,
     audience: options.audience,

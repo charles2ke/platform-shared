@@ -1,3 +1,4 @@
+export * as adapters from './adapters/index.js';
 export * as auth from './auth/index.js';
 export * as notifications from './notifications/index.js';
 export * as profile from './profile/index.js';

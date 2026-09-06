@@ -1,5 +1,5 @@
 import { authorize, createAuthGuard, createRoleRegistry, InMemoryTokenRevocationStore } from '../src/auth/index.js';
-import { CHANNELS, InMemoryNotificationScheduler, NotificationService } from '../src/notifications/index.js';
+import { CHANNELS, InMemoryDeadLetterQueue, InMemoryNotificationScheduler, NotificationService } from '../src/notifications/index.js';
 
 const WORKOUT_ROLES = createRoleRegistry({
   athlete: ['workout:read', 'workout:write'],
@@ -10,7 +10,7 @@ const WORKOUT_ROLES = createRoleRegistry({
  * Workout combines RBAC-protected routes with scheduled push reminders that
  * retry with exponential backoff and dead-letter after the attempt budget.
  */
-export function createWorkoutIntegration({ jwtSecret, adapters, revocationStore = new InMemoryTokenRevocationStore(), deadLetters = [] }) {
+export function createWorkoutIntegration({ jwtSecret, adapters, revocationStore = new InMemoryTokenRevocationStore(), deadLetters = [], deadLetterStore = new InMemoryDeadLetterQueue() }) {
   const scheduler = new InMemoryNotificationScheduler();
   const notifications = new NotificationService({
     adapters,
@@ -19,6 +19,7 @@ export function createWorkoutIntegration({ jwtSecret, adapters, revocationStore 
     retryDelayMs: 30_000,
     retryBackoffFactor: 2,
     maxRetryDelayMs: 15 * 60_000,
+    deadLetterStore,
     onDeadLetter: (entry) => deadLetters.push(entry)
   });
   const guard = createAuthGuard({ secret: jwtSecret, roleRegistry: WORKOUT_ROLES, revocationStore });
@@ -26,6 +27,7 @@ export function createWorkoutIntegration({ jwtSecret, adapters, revocationStore 
   return {
     scheduler,
     deadLetters,
+    deadLetterStore,
     requireWorkoutWrite: (request) => guard(request, { permissions: ['workout:write'] }),
     assignWorkout(request, workout) {
       const principal = guard(request, { roles: ['coach'] });

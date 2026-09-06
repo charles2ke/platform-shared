@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { createRoleRegistry } from '../src/auth/index.js';
 import { InMemoryProfileStore, ProfileService, ProfileStore, normalizeProfile, validateProfile } from '../src/profile/index.js';
 
 test('normalizes and validates profile input', async () => {
@@ -93,4 +94,36 @@ test('updates a profile when no update payload is provided', async () => {
   const created = await service.create({ id: 'profile-noop', displayName: 'Charles' });
   const updated = await service.update('profile-noop');
   assert.deepEqual(updated, created);
+});
+
+test('enforces access policies on profile service methods', async () => {
+  const service = new ProfileService({
+    policy: {
+      'profile.create': { permissions: ['profile:write'] },
+      'profile.get': { permissions: ['profile:read'] },
+      'profile.update': { permissions: ['profile:write'] },
+      'profile.delete': { roles: ['admin'] },
+      'profile.list': { permissions: ['profile:read'] }
+    },
+    roleRegistry: createRoleRegistry({ admin: ['profile:read', 'profile:write'], viewer: ['profile:read'] })
+  });
+
+  const admin = { id: 'admin-1', roles: ['admin'] };
+  const viewer = { id: 'viewer-1', roles: ['viewer'] };
+
+  const profile = await service.create({ displayName: 'Charles', contact: { email: 'c@example.com' } }, { principal: admin });
+  assert.equal((await service.get(profile.id, { principal: viewer })).id, profile.id);
+  assert.equal((await service.list({ principal: viewer })).length, 1);
+  assert.equal((await service.update(profile.id, { timezone: 'UTC' }, { principal: admin })).timezone, 'UTC');
+
+  await assert.rejects(() => service.update(profile.id, { timezone: 'UTC' }, { principal: viewer }), { code: 'AUTH_FORBIDDEN' });
+  await assert.rejects(() => service.delete(profile.id, { principal: viewer }), { code: 'AUTH_FORBIDDEN' });
+  await assert.rejects(() => service.get(profile.id), { code: 'AUTH_PRINCIPAL_REQUIRED' });
+  assert.equal(await service.delete(profile.id, { principal: admin }), true);
+});
+
+test('profile service stays unguarded when no policy is configured', async () => {
+  const service = new ProfileService();
+  const profile = await service.create({ displayName: 'Open', contact: { email: 'open@example.com' } });
+  assert.equal((await service.get(profile.id)).displayName, 'Open');
 });

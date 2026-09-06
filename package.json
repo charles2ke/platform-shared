@@ -9,7 +9,8 @@
     "./auth": "./src/auth/index.js",
     "./profile": "./src/profile/index.js",
     "./notifications": "./src/notifications/index.js",
-    "./shared": "./src/shared/index.js"
+    "./shared": "./src/shared/index.js",
+    "./adapters": "./src/adapters/index.js"
   },
   "scripts": {
     "build": "node scripts/check-syntax.js",

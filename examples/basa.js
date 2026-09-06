@@ -1,11 +1,21 @@
-import { createAuthGuard, createRoleRegistry, InMemoryTokenRevocationStore } from '../src/auth/index.js';
+import { createAccessPolicy, createAuthGuard, createRoleRegistry, InMemoryTokenRevocationStore } from '../src/auth/index.js';
 import { CHANNELS, InMemoryNotificationScheduler, NotificationService } from '../src/notifications/index.js';
 import { ProfileService } from '../src/profile/index.js';
 
 const BASA_ROLES = createRoleRegistry({
   customer: ['order:read'],
-  support: { permissions: ['order:refund', 'profile:read'], inherits: ['customer'] }
+  support: { permissions: ['order:refund', 'profile:read', 'profile:write'], inherits: ['customer'] }
 });
+
+// RBAC is also enforced inside the profile service, so jobs and RPC callers are
+// checked the same way as HTTP routes.
+const BASA_PROFILE_POLICY = createAccessPolicy({
+  'profile.create': { permissions: ['profile:write'] },
+  'profile.get': { permissions: ['profile:read'] },
+  'profile.update': { permissions: ['profile:write'] },
+  'profile.delete': { permissions: ['profile:write'] },
+  'profile.list': { permissions: ['profile:read'] }
+}, { roleRegistry: BASA_ROLES });
 
 /**
  * Basa shows the full stack: RBAC-guarded order operations, profile CRUD, and
@@ -15,10 +25,13 @@ export function createBasaIntegration({ jwtSecret, profileStore, adapters, revoc
   const scheduler = new InMemoryNotificationScheduler();
   const notifications = new NotificationService({ adapters, scheduler, maxScheduleAttempts: 3, retryDelayMs: 60_000, retryBackoffFactor: 2 });
   const guard = createAuthGuard({ secret: jwtSecret, roleRegistry: BASA_ROLES, revocationStore });
+  const profiles = new ProfileService({ store: profileStore, policy: BASA_PROFILE_POLICY });
 
   return {
     scheduler,
-    profiles: new ProfileService({ store: profileStore }),
+    profiles,
+    createCustomerProfile: (request, input) => profiles.create(input, { principal: guard(request) }),
+    readCustomerProfile: (request, id) => profiles.get(id, { principal: guard(request) }),
     requireOrderRead: (request) => guard(request, { permissions: ['order:read'] }),
     requireRefund: (request) => guard(request, { permissions: ['order:refund'] }),
     sendOrderUpdate: (order) => notifications.send(buildOrderUpdate(order)),

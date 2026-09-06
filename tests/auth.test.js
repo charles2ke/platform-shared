@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { AccountStore, authorize, decodeToken, describeToken, createAuthGuard, createRoleRegistry, getBearerToken, InMemoryAccountStore, InMemoryTokenRevocationStore, issueToken, issueTokenPair, protect, refreshAccessToken, resolvePrincipal, rotateTokenPair, TokenRevocationStore, verifyToken } from '../src/auth/index.js';
+import { AccountStore, authorize, createAccessPolicy, revokeSession, toAccessPolicy, decodeToken, describeToken, createAuthGuard, createRoleRegistry, getBearerToken, InMemoryAccountStore, InMemoryTokenRevocationStore, issueToken, issueTokenPair, protect, refreshAccessToken, resolvePrincipal, rotateTokenPair, TokenRevocationStore, verifyToken } from '../src/auth/index.js';
 
 const secret = 'test-secret-that-is-long-enough-for-hmac';
 
@@ -264,4 +264,116 @@ test('decodes and describes tokens for introspection', () => {
   assert.throws(() => decodeToken('not-a-token'), { code: 'AUTH_INVALID_TOKEN' });
   assert.throws(() => decodeToken(42), { code: 'AUTH_INVALID_TOKEN' });
   assert.throws(() => describeToken(null), { code: 'AUTH_INVALID_TOKEN' });
+});
+
+test('issues access and refresh tokens under one session id and revokes them together', () => {
+  const revocationStore = new InMemoryTokenRevocationStore();
+  const now = new Date('2026-01-01T00:00:00Z');
+  const pair = issueTokenPair({
+    subject: 'user-session',
+    roles: ['member'],
+    secret,
+    now,
+    accessTokenTtlSeconds: 60,
+    refreshTokenTtlSeconds: 600
+  });
+  const accessPayload = verifyToken(pair.accessToken, { secret, expectedUse: 'access', now });
+  const refreshPayload = verifyToken(pair.refreshToken, { secret, expectedUse: 'refresh', now });
+
+  assert.equal(accessPayload.sid, pair.sessionId);
+  assert.equal(refreshPayload.sid, pair.sessionId);
+  assert.notEqual(accessPayload.jti, refreshPayload.jti);
+  assert.equal(describeToken(accessPayload).sessionId, pair.sessionId);
+
+  assert.deepEqual(revokeSession(accessPayload, { revocationStore }), { sessionId: pair.sessionId });
+  assert.throws(() => verifyToken(pair.accessToken, { secret, expectedUse: 'access', revocationStore, now }), { code: 'AUTH_TOKEN_REVOKED' });
+  assert.throws(() => verifyToken(pair.refreshToken, { secret, expectedUse: 'refresh', revocationStore, now }), { code: 'AUTH_TOKEN_REVOKED' });
+  const twoMinutesLater = new Date(now.getTime() + 120_000);
+  assert.equal(revocationStore.prune(twoMinutesLater), 0);
+  assert.throws(
+    () => verifyToken(pair.refreshToken, { secret, expectedUse: 'refresh', revocationStore, now: twoMinutesLater }),
+    { code: 'AUTH_TOKEN_REVOKED' }
+  );
+});
+
+test('revokeSession falls back to single token revocation and validates input', () => {
+  const revocationStore = new InMemoryTokenRevocationStore();
+  const token = issueToken({ subject: 'user-legacy', secret });
+  const payload = verifyToken(token, { secret });
+
+  const result = revokeSession(payload, { revocationStore });
+  assert.equal(result.tokenId, payload.jti);
+  assert.throws(() => verifyToken(token, { secret, revocationStore }), { code: 'AUTH_TOKEN_REVOKED' });
+  assert.throws(() => revokeSession(payload, {}), { code: 'AUTH_INVALID_REVOCATION_STORE' });
+  assert.throws(() => revokeSession(undefined, { revocationStore }), { code: 'AUTH_INVALID_TOKEN' });
+  assert.throws(() => revocationStore.revokeSession(''), { code: 'AUTH_SESSION_NOT_REVOCABLE' });
+});
+
+test('refresh token replay ends the replayed session and rotation starts a new one', () => {
+  const revocationStore = new InMemoryTokenRevocationStore();
+  const pair = issueTokenPair({ subject: 'user-chain', roles: ['member'], secret });
+  const rotated = rotateTokenPair(pair.refreshToken, { secret, revocationStore });
+
+  assert.notEqual(rotated.sessionId, pair.sessionId);
+  assert.throws(
+    () => rotateTokenPair(pair.refreshToken, { secret, revocationStore, revokeSubjectOnReuse: false }),
+    { code: 'AUTH_REFRESH_TOKEN_REUSED' }
+  );
+  // The replayed session's access token stops verifying, the new session survives.
+  assert.throws(() => verifyToken(pair.accessToken, { secret, expectedUse: 'access', revocationStore }), { code: 'AUTH_TOKEN_REVOKED' });
+  assert.equal(verifyToken(rotated.accessToken, { secret, expectedUse: 'access', revocationStore }).sub, 'user-chain');
+});
+
+test('refreshed access tokens keep the session id and prune drops expired sessions', () => {
+  const revocationStore = new InMemoryTokenRevocationStore();
+  const now = new Date('2026-01-01T00:00:00Z');
+  const pair = issueTokenPair({ subject: 'user-refresh-session', secret, now });
+  const accessToken = refreshAccessToken(pair.refreshToken, { secret, now });
+  const payload = verifyToken(accessToken, { secret, expectedUse: 'access', now });
+
+  assert.equal(payload.sid, pair.sessionId);
+  revocationStore.revokeSession(payload.sid, { expiresAt: payload.exp });
+  assert.equal(revocationStore.prune(now), 0);
+  assert.equal(revocationStore.prune(new Date('2026-01-02T00:00:00Z')), 1);
+
+  // A permanent revocation is never downgraded to an expiring one.
+  const permanent = new InMemoryTokenRevocationStore();
+  permanent.revokeSession('session-permanent');
+  permanent.revokeSession('session-permanent', { expiresAt: 0 });
+  assert.equal(permanent.prune(new Date('2030-01-01T00:00:00Z')), 0);
+  assert.equal(permanent.isRevoked({ sid: 'session-permanent' }), true);
+  assert.equal(verifyToken(accessToken, { secret, expectedUse: 'access', now, revocationStore }).sid, pair.sessionId);
+});
+
+test('guards expose the session id on the principal', () => {
+  const guard = createAuthGuard({ secret });
+  const pair = issueTokenPair({ subject: 'user-guard-session', roles: ['member'], secret });
+  const principal = guard({ headers: { authorization: 'Bearer ' + pair.accessToken } });
+  assert.equal(principal.sessionId, pair.sessionId);
+});
+
+test('access policies enforce RBAC outside of HTTP routes', () => {
+  const roleRegistry = createRoleRegistry({ coach: ['profile:write'] });
+  const policy = createAccessPolicy({
+    'profile.update': { permissions: ['profile:write'] },
+    'profile.list': { roles: ['admin'] }
+  }, { roleRegistry });
+
+  assert.deepEqual(policy.actions(), ['profile.update', 'profile.list']);
+  assert.deepEqual(policy.requirementsFor('profile.update'), { permissions: ['profile:write'] });
+  assert.equal(policy.enforce('profile.update', { id: 'coach-1', roles: ['coach'] }).id, 'coach-1');
+  assert.equal(policy.enforce('profile.read', undefined), undefined);
+  assert.throws(() => policy.enforce('profile.list', { id: 'coach-1', roles: ['coach'] }), { code: 'AUTH_FORBIDDEN', status: 403 });
+  assert.throws(() => policy.enforce('profile.update', undefined), { code: 'AUTH_PRINCIPAL_REQUIRED', status: 401 });
+});
+
+test('access policies validate their configuration and optional principals', () => {
+  assert.throws(() => createAccessPolicy([]), { code: 'AUTH_INVALID_POLICY' });
+  assert.throws(() => createAccessPolicy({ 'a.b': ['profile:read'] }), { code: 'AUTH_INVALID_POLICY' });
+
+  const optional = createAccessPolicy({ 'job.run': { permissions: ['job:run'] } }, { requirePrincipal: false });
+  assert.equal(optional.enforce('job.run', undefined), undefined);
+  assert.equal(toAccessPolicy(undefined), undefined);
+  assert.equal(toAccessPolicy(optional), optional);
+  assert.throws(() => toAccessPolicy({ 'job.run': { roles: ['worker'] } }).enforce('job.run', { id: 'j', roles: [] }), { code: 'AUTH_FORBIDDEN' });
 });

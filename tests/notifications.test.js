@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { CHANNELS, ChannelAdapter, DELIVERY_STATUS, InMemoryNotificationScheduler, MockChannelAdapter, NotificationScheduler, NotificationService, renderTemplate } from '../src/notifications/index.js';
+import { CHANNELS, ChannelAdapter, DeadLetterStore, InMemoryDeadLetterQueue, DELIVERY_STATUS, InMemoryNotificationScheduler, MockChannelAdapter, NotificationScheduler, NotificationService, renderTemplate } from '../src/notifications/index.js';
 
 test('renders notification template variables', () => {
   assert.equal(renderTemplate('Hello {{ user.name }}', { user: { name: 'Charles' } }), 'Hello Charles');
@@ -337,4 +337,98 @@ test('reports unsupported cancel and list operations on partial schedulers', asy
     () => new NotificationService({ adapters: {}, scheduler: { ...partial, cancel: async () => '1' } }).cancelScheduled('trip-1'),
     { code: 'NOTIFICATION_INVALID_SCHEDULER_RESPONSE' }
   );
+});
+
+test('retries only the channels that failed on a partial delivery', async () => {
+  const email = new MockChannelAdapter({ channel: CHANNELS.EMAIL });
+  const push = new MockChannelAdapter({ channel: CHANNELS.PUSH, fail: true });
+  const service = new NotificationService({
+    adapters: { email, push },
+    maxScheduleAttempts: 3,
+    retryDelayMs: 60_000
+  });
+
+  const notification = { id: 'partial-1', channels: [CHANNELS.EMAIL, CHANNELS.PUSH], body: 'hi' };
+  await service.schedule(notification, new Date('2026-01-01T00:00:00Z'));
+  const summary = await service.dispatchScheduled({ now: new Date('2026-01-01T00:00:00Z') });
+
+  assert.equal(summary.status, DELIVERY_STATUS.PARTIAL);
+  assert.equal(summary.retried, 1);
+  assert.deepEqual(summary.results[0].retryChannels, [CHANNELS.PUSH]);
+
+  const [pending] = await service.listScheduled();
+  assert.deepEqual(pending.notification.channels, [CHANNELS.PUSH]);
+  assert.equal(pending.attempts, 1);
+  assert.equal(email.deliveries.length, 1);
+});
+
+test('keeps partial deliveries pending only when partial retries are enabled', async () => {
+  const adapters = { email: new MockChannelAdapter({ channel: CHANNELS.EMAIL }), push: new MockChannelAdapter({ channel: CHANNELS.PUSH, fail: true }) };
+  const service = new NotificationService({ adapters, retryPartialFailures: false });
+
+  await service.schedule({ id: 'partial-2', channels: [CHANNELS.EMAIL, CHANNELS.PUSH], body: 'hi' }, new Date('2026-01-01T00:00:00Z'));
+  const summary = await service.dispatchScheduled({ now: new Date('2026-01-01T00:00:00Z') });
+
+  assert.equal(summary.retried, 0);
+  assert.equal(summary.deadLettered, 0);
+  assert.equal(summary.pending, 0);
+});
+
+test('records exhausted notifications in a dead-letter store', async () => {
+  const deadLetterStore = new InMemoryDeadLetterQueue();
+  const service = new NotificationService({
+    adapters: { email: new MockChannelAdapter({ channel: CHANNELS.EMAIL, fail: true }) },
+    maxScheduleAttempts: 1,
+    deadLetterStore
+  });
+
+  await service.schedule({ id: 'dead-1', channels: [CHANNELS.EMAIL], body: 'hi' }, new Date('2026-01-01T00:00:00Z'));
+  const summary = await service.dispatchScheduled({ now: new Date('2026-01-01T00:00:00Z') });
+
+  assert.equal(summary.deadLettered, 1);
+  const records = await deadLetterStore.list();
+  assert.equal(records.length, 1);
+  assert.equal(records[0].notification.id, 'dead-1');
+  assert.equal(records[0].reason, 'retry-limit-reached');
+  assert.deepEqual(records[0].channels, [CHANNELS.EMAIL]);
+  assert.equal(await deadLetterStore.size(), 1);
+  assert.equal(await deadLetterStore.remove('dead-1'), 1);
+  assert.deepEqual(await deadLetterStore.drain(), []);
+});
+
+test('validates dead-letter store configuration and records', async () => {
+  assert.throws(() => new NotificationService({ deadLetterStore: {} }), { code: 'NOTIFICATION_INVALID_DEAD_LETTER_STORE' });
+  await assert.rejects(() => new InMemoryDeadLetterQueue().add({}), { code: 'NOTIFICATION_INVALID_DEAD_LETTER_RECORD' });
+  await assert.rejects(() => new DeadLetterStore().add({ notification: {} }), { code: 'NOTIFICATION_DEAD_LETTER_STORE_NOT_IMPLEMENTED' });
+});
+
+test('enforces access policies on notification service methods', async () => {
+  const service = new NotificationService({
+    adapters: { email: new MockChannelAdapter({ channel: CHANNELS.EMAIL }) },
+    policy: {
+      'notification.send': { permissions: ['notifications:send'] },
+      'notification.schedule': { permissions: ['notifications:send'] },
+      'notification.cancel': { permissions: ['notifications:manage'] },
+      'notification.list': { permissions: ['notifications:manage'] },
+      'notification.dispatch': { roles: ['worker'] }
+    }
+  });
+
+  const sender = { id: 'sender', permissions: ['notifications:send'] };
+  const worker = { id: 'worker-1', roles: ['worker'], permissions: ['notifications:manage'] };
+  const notification = { id: 'policy-1', channels: [CHANNELS.EMAIL], body: 'hi' };
+
+  assert.equal((await service.send(notification, { principal: sender })).status, DELIVERY_STATUS.SENT);
+  await service.schedule(notification, new Date('2026-01-01T00:00:00Z'), { principal: sender });
+  assert.equal((await service.listScheduled({ principal: worker })).length, 1);
+
+  await assert.rejects(() => service.send(notification, { principal: worker }), { code: 'AUTH_FORBIDDEN' });
+  await assert.rejects(() => service.cancelScheduled('policy-1', { principal: sender }), { code: 'AUTH_FORBIDDEN' });
+  await assert.rejects(() => service.dispatchScheduled({ now: new Date('2026-01-01T00:00:00Z') }), { code: 'AUTH_PRINCIPAL_REQUIRED' });
+  // Dispatch authorization is checked once; queued deliveries are not re-checked
+  // against the send policy for the worker principal.
+  const dispatched = await service.dispatchScheduled({ now: new Date('2026-01-01T00:00:00Z'), principal: worker });
+  assert.equal(dispatched.processed, 1);
+  assert.equal(dispatched.status, DELIVERY_STATUS.SENT);
+  assert.equal(dispatched.deadLettered, 0);
 });

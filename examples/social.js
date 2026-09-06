@@ -1,4 +1,5 @@
-import { createAuthGuard, createRoleRegistry, describeToken, InMemoryTokenRevocationStore, issueTokenPair, rotateTokenPair, verifyToken } from '../src/auth/index.js';
+import { createAuthGuard, createRoleRegistry, describeToken, InMemoryTokenRevocationStore, issueTokenPair, revokeSession, rotateTokenPair, verifyToken } from '../src/auth/index.js';
+import { createExpressAuthMiddleware } from '../src/adapters/index.js';
 import { ProfileService } from '../src/profile/index.js';
 
 const SOCIAL_ROLES = createRoleRegistry({
@@ -31,7 +32,12 @@ export function createSocialPlatform({ jwtSecret, profileStore, audience = 'soci
     }),
     // Session endpoint: expiry/role summary for the current access token.
     session: (accessToken) => describeToken(verifyToken(accessToken, { ...tokenOptions, expectedUse: 'access', revocationStore })),
+    // Express/Connect apps mount the shared guard as middleware.
+    memberMiddleware: createExpressAuthMiddleware(guard, { requirements: { roles: ['member', 'moderator', 'admin'] } }),
     logout: (payload) => revocationStore.revokeToken(payload),
+    // Ends the whole session: the access token issued with this refresh token
+    // stops verifying at the same time.
+    logoutSession: (payload) => revokeSession(payload, { revocationStore }),
     logoutEverywhere: (subject) => revocationStore.revokeSubject(subject)
   };
 }

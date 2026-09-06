@@ -70,8 +70,13 @@ test('basa example guards refunds and schedules order updates', async () => {
   assert.throws(() => basa.requireRefund(bearer(customerToken)), { code: 'AUTH_FORBIDDEN' });
   assert.equal(basa.requireRefund(bearer(supportToken)).id, 'support-1');
 
-  const profile = await basa.profiles.create({ displayName: 'Customer One', contact: { email: 'customer@example.com' } });
-  assert.equal((await basa.profiles.get(profile.id)).displayName, 'Customer One');
+  const profile = await basa.createCustomerProfile(bearer(supportToken), { displayName: 'Customer One', contact: { email: 'customer@example.com' } });
+  assert.equal((await basa.readCustomerProfile(bearer(supportToken), profile.id)).displayName, 'Customer One');
+  // Profile RBAC is enforced inside the service, not only on the route.
+  await assert.rejects(
+    () => basa.createCustomerProfile(bearer(customerToken), { displayName: 'Nope', contact: { email: 'nope@example.com' } }),
+    { code: 'AUTH_FORBIDDEN' }
+  );
 
   const when = new Date('2026-04-01T00:00:00Z');
   await basa.scheduleOrderUpdate({ id: 'o-1', email: 'customer@example.com', phone: '+254700000000', status: 'shipped' }, when);
@@ -79,6 +84,33 @@ test('basa example guards refunds and schedules order updates', async () => {
 
   assert.equal(dispatched.status, DELIVERY_STATUS.SENT);
   assert.equal(sms.deliveries[0].message.body, 'Your order status is shipped.');
+});
+
+test('social example ends a whole session on logout and replays dead-lettered reminders', async () => {
+  const social = createSocialPlatform({ jwtSecret });
+  const tokens = social.login({ id: 'user-4', roles: ['member'] });
+  const claims = social.session(tokens.accessToken);
+
+  assert.equal(claims.sessionId, tokens.sessionId);
+  social.logoutSession(verifyToken(tokens.accessToken, { secret: jwtSecret, issuer: 'platform-shared', audience: 'social' }));
+  assert.throws(() => social.requireMember(bearer(tokens.accessToken)), { code: 'AUTH_TOKEN_REVOKED' });
+  assert.throws(() => social.refresh(tokens.refreshToken), { code: 'AUTH_REFRESH_TOKEN_REUSED' });
+
+  const email = new MockChannelAdapter({ channel: CHANNELS.EMAIL, fail: true });
+  const push = new MockChannelAdapter({ channel: CHANNELS.PUSH, fail: true });
+  const travel = createTravelNotifications({ adapters: { email, push } });
+  const when = new Date('2026-08-01T00:00:00Z');
+
+  await travel.scheduleTripReminder({ id: 'user-4', email: 'user@example.com' }, { id: 't-3', destination: 'Kisumu', startsAt: 'Sunday' }, when);
+  let attempt = when;
+  for (let index = 0; index < 3; index += 1) {
+    attempt = new Date(attempt.getTime() + 60 * 60_000);
+    await travel.worker.runOnce(attempt);
+  }
+
+  assert.equal((await travel.deadLetterStore.list()).length, 1);
+  assert.deepEqual(await travel.replayFailedReminders(attempt), { replayed: 1, notifications: ['trip-t-3'], failed: [] });
+  assert.deepEqual((await travel.listPendingReminders()).map((entry) => entry.notification.id), ['trip-t-3']);
 });
 
 test('social example reports sessions and blocks refresh token replay', () => {
