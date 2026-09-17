@@ -1,8 +1,27 @@
 {
   "name": "@charles2ke/platform-shared",
-  "version": "0.1.0",
-  "description": "Shared platform foundations for auth, profiles, and notifications.",
+  "version": "0.2.0",
+  "description": "Shared, dependency-free platform foundations for auth, profiles, and notifications.",
+  "keywords": [
+    "auth",
+    "jwt",
+    "rbac",
+    "profile",
+    "notifications",
+    "platform"
+  ],
+  "homepage": "https://charles2ke.github.io/platform-shared/",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/charles2ke/platform-shared.git"
+  },
+  "bugs": {
+    "url": "https://github.com/charles2ke/platform-shared/issues"
+  },
+  "author": "charles2ke",
+  "license": "MIT",
   "type": "module",
+  "sideEffects": false,
   "main": "./src/index.js",
   "exports": {
     ".": "./src/index.js",
@@ -10,14 +29,27 @@
     "./profile": "./src/profile/index.js",
     "./notifications": "./src/notifications/index.js",
     "./shared": "./src/shared/index.js",
-    "./adapters": "./src/adapters/index.js"
+    "./adapters": "./src/adapters/index.js",
+    "./package.json": "./package.json"
   },
+  "files": [
+    "src",
+    "README.md",
+    "SECURITY.md",
+    "LICENSE"
+  ],
   "scripts": {
     "build": "node scripts/check-syntax.js",
-    "test": "node --test"
+    "test": "node --test",
+    "test:coverage": "node --test --experimental-test-coverage",
+    "check": "npm run build && npm test",
+    "audit": "npm audit --omit=dev --audit-level=high"
   },
   "engines": {
     "node": ">=22"
   },
-  "license": "MIT"
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
 }
