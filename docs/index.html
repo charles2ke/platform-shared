@@ -161,7 +161,8 @@ import { loadConfig, PlatformError } from '@charles2ke/platform-shared/shared';<
       <h3>Token lifecycle</h3>
       <ul>
         <li><code>issueTokenPair()</code> access + refresh with a shared session id (<code>sid</code>)</li>
-        <li><code>refreshAccessToken()</code>, <code>rotateTokenPair()</code> with replay detection</li>
+        <li><code>refreshAccessToken()</code> verifies a refresh token and issues a new access token only, with no rotation or replay detection</li>
+        <li><code>rotateTokenPair()</code> issues a new access/refresh pair and detects replay of an already-rotated refresh token, revoking the affected session (and optionally the subject)</li>
         <li><code>verifyToken()</code>, <code>decodeToken()</code>, <code>describeToken()</code></li>
       </ul>
     </div>
@@ -343,7 +344,8 @@ const { processed, retried, deadLettered, pending, pendingKnown } =
 <section id="shared">
   <h2>Shared: config, errors, logging</h2>
   <ul>
-    <li><code>loadConfig()</code> reads and validates environment configuration.</li>
+    <li><code>loadConfig()</code> reads environment values, applies defaults, and coerces numeric fields, without validating them.</li>
+    <li><code>requireJwtSecret()</code> separately validates that <code>PLATFORM_JWT_SECRET</code> meets the minimum length.</li>
     <li><code>PlatformError</code> carries a stable <code>code</code>, HTTP <code>status</code>, message, and details.</li>
     <li>Logger hooks accept any object exposing <code>debug</code>, <code>info</code>, <code>warn</code>, and <code>error</code>.</li>
   </ul>
