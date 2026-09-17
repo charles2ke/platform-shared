@@ -1,0 +1,455 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>platform-shared &middot; shared auth, profile, and notification foundations</title>
+<meta name="description" content="Dependency-free Node.js foundations for JWT auth, RBAC, canonical profiles, and multi-channel notifications shared across social, travel, workout, and basa." />
+<link rel="canonical" href="https://charles2ke.github.io/platform-shared/" />
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #0d1117;
+    --panel: #151b23;
+    --border: #2a323d;
+    --text: #e6edf3;
+    --muted: #9aa7b4;
+    --accent: #58a6ff;
+    --accent-soft: rgba(88, 166, 255, 0.12);
+    --code-bg: #0b0f15;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #ffffff;
+      --panel: #f6f8fa;
+      --border: #d0d7de;
+      --text: #1f2328;
+      --muted: #59636e;
+      --accent: #0969da;
+      --accent-soft: rgba(9, 105, 218, 0.08);
+      --code-bg: #f6f8fa;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  }
+  a { color: var(--accent); }
+  header.hero {
+    padding: 72px 24px 48px;
+    border-bottom: 1px solid var(--border);
+    background: linear-gradient(180deg, var(--accent-soft), transparent);
+  }
+  .wrap { max-width: 980px; margin: 0 auto; }
+  h1 { font-size: 2.4rem; margin: 0 0 8px; letter-spacing: -0.02em; }
+  .tagline { color: var(--muted); font-size: 1.1rem; max-width: 62ch; }
+  .badges { margin-top: 20px; display: flex; flex-wrap: wrap; gap: 8px; }
+  .badge {
+    font-size: 0.8rem; padding: 4px 10px; border-radius: 999px;
+    border: 1px solid var(--border); background: var(--panel); color: var(--muted);
+  }
+  nav.toc { margin-top: 28px; display: flex; flex-wrap: wrap; gap: 12px; }
+  nav.toc a { text-decoration: none; font-size: 0.92rem; }
+  main { padding: 8px 24px 72px; }
+  section { padding-top: 48px; }
+  h2 { font-size: 1.5rem; margin: 0 0 12px; }
+  h3 { font-size: 1.08rem; margin: 24px 0 6px; }
+  p { max-width: 78ch; }
+  ul { max-width: 78ch; }
+  .grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+  .card {
+    border: 1px solid var(--border); border-radius: 10px;
+    background: var(--panel); padding: 18px;
+  }
+  .card h3 { margin-top: 0; }
+  .card p, .card ul { font-size: 0.94rem; color: var(--muted); }
+  pre {
+    background: var(--code-bg); border: 1px solid var(--border); border-radius: 10px;
+    padding: 14px 16px; overflow-x: auto; font-size: 0.86rem; line-height: 1.5;
+  }
+  code { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; }
+  p code, li code, td code { background: var(--panel); border: 1px solid var(--border); border-radius: 5px; padding: 1px 5px; font-size: 0.86em; }
+  table { border-collapse: collapse; width: 100%; font-size: 0.92rem; margin-top: 12px; }
+  th, td { text-align: left; border-bottom: 1px solid var(--border); padding: 8px 10px; vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; }
+  footer { border-top: 1px solid var(--border); padding: 28px 24px 56px; color: var(--muted); font-size: 0.9rem; }
+</style>
+</head>
+<body>
+<header class="hero">
+  <div class="wrap">
+    <h1>platform-shared</h1>
+    <p class="tagline">
+      Dependency-free Node.js foundations for authentication, canonical profiles, and
+      multi-channel notifications, shared across <strong>social</strong>, <strong>travel</strong>,
+      <strong>workout</strong>, and <strong>basa</strong>.
+    </p>
+    <div class="badges">
+      <span class="badge">Zero runtime dependencies</span>
+      <span class="badge">Node.js &ge; 22 (ESM)</span>
+      <span class="badge">HS256 JWT + refresh rotation</span>
+      <span class="badge">RBAC policies</span>
+      <span class="badge">CodeQL + Dependabot</span>
+      <span class="badge">MIT licensed</span>
+    </div>
+    <nav class="toc">
+      <a href="#why">Why</a>
+      <a href="#install">Install</a>
+      <a href="#auth">Auth</a>
+      <a href="#profile">Profiles</a>
+      <a href="#notifications">Notifications</a>
+      <a href="#adapters">Adapters</a>
+      <a href="#shared">Config &amp; errors</a>
+      <a href="#hardening">Hardening</a>
+      <a href="#config">Environment</a>
+      <a href="#examples">Examples</a>
+      <a href="https://github.com/charles2ke/platform-shared">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+
+<section id="why">
+  <h2>Why this package exists</h2>
+  <p>
+    Four applications needed the same identity, profile, and messaging behavior. Copying that
+    logic per app produced divergent token claims, permission names, and retry semantics.
+    <code>platform-shared</code> keeps those contracts in one place while staying framework-light:
+    core modules have no HTTP or provider assumptions, and every store, scheduler, and channel is
+    constructor-injected so each app can plug in its own persistence and providers.
+  </p>
+  <div class="grid">
+    <div class="card">
+      <h3>Framework-light</h3>
+      <p>Guards work on a request shape, not on Express/Fastify/Next internals. Adapters are opt-in.</p>
+    </div>
+    <div class="card">
+      <h3>Dependency-free</h3>
+      <p>Only Node built-ins, so there is no transitive supply-chain surface to audit or patch.</p>
+    </div>
+    <div class="card">
+      <h3>Swappable everything</h3>
+      <p>Account, profile, revocation, scheduler, dead-letter, and channel interfaces all ship with in-memory reference implementations.</p>
+    </div>
+  </div>
+</section>
+
+<section id="install">
+  <h2>Install and run</h2>
+<pre><code>npm install github:charles2ke/platform-shared
+
+npm test          # Node built-in test runner
+npm run build     # syntax check across src, tests, examples, scripts
+npm run check     # build + test
+npm run audit     # production dependency audit</code></pre>
+  <p>Subpath exports keep imports explicit:</p>
+<pre><code>import { issueTokenPair } from '@charles2ke/platform-shared/auth';
+import { ProfileService } from '@charles2ke/platform-shared/profile';
+import { NotificationService } from '@charles2ke/platform-shared/notifications';
+import { createExpressAuthMiddleware } from '@charles2ke/platform-shared/adapters';
+import { loadConfig, PlatformError } from '@charles2ke/platform-shared/shared';</code></pre>
+</section>
+
+<section id="auth">
+  <h2>Auth: tokens, sessions, and RBAC</h2>
+  <div class="grid">
+    <div class="card">
+      <h3>Token lifecycle</h3>
+      <ul>
+        <li><code>issueTokenPair()</code> access + refresh with a shared session id (<code>sid</code>)</li>
+        <li><code>refreshAccessToken()</code>, <code>rotateTokenPair()</code> with replay detection</li>
+        <li><code>verifyToken()</code>, <code>decodeToken()</code>, <code>describeToken()</code></li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>Revocation</h3>
+      <ul>
+        <li><code>revokeToken()</code> single token</li>
+        <li><code>revokeSession()</code> one login (access + refresh)</li>
+        <li><code>revokeSubject()</code> log out everywhere</li>
+        <li><code>prune()</code> drops expired entries</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>Authorization</h3>
+      <ul>
+        <li><code>createRoleRegistry()</code> roles &rarr; permissions with inheritance</li>
+        <li><code>resolvePrincipal()</code> exposes <code>effectiveRoles</code></li>
+        <li><code>createAccessPolicy()</code> action-keyed requirements</li>
+        <li><code>authorize()</code> outside HTTP routes</li>
+      </ul>
+    </div>
+  </div>
+
+  <h3>Issue, guard, rotate, revoke</h3>
+<pre><code>import {
+  createAuthGuard,
+  createRoleRegistry,
+  InMemoryTokenRevocationStore,
+  issueTokenPair,
+  revokeSession,
+  rotateTokenPair
+} from '@charles2ke/platform-shared/auth';
+
+const revocationStore = new InMemoryTokenRevocationStore();
+const roleRegistry = createRoleRegistry({
+  member: ['profile:read'],
+  moderator: { permissions: ['post:delete'], inherits: ['member'] }
+});
+
+const tokens = issueTokenPair({
+  subject: 'user-123',
+  roles: ['member'],
+  secret: process.env.PLATFORM_JWT_SECRET,
+  issuer: 'platform-shared',
+  audience: 'social'
+});
+
+const guard = createAuthGuard({
+  secret: process.env.PLATFORM_JWT_SECRET,
+  issuer: 'platform-shared',
+  audience: 'social',
+  revocationStore,
+  roleRegistry
+});
+
+const principal = guard(request, { permissions: ['profile:read'] });
+
+// Refresh endpoint: rotate, revoke the presented token, and treat replay as compromise.
+const rotated = rotateTokenPair(tokens.refreshToken, {
+  secret: process.env.PLATFORM_JWT_SECRET,
+  issuer: 'platform-shared',
+  audience: 'social',
+  revocationStore,
+  onReuseDetected: ({ subject }) =&gt; securityLog.warn('refresh replay', { subject })
+});
+
+// Logout.
+revokeSession(principal.claims, { revocationStore });</code></pre>
+
+  <h3>Policies that also apply to jobs and consumers</h3>
+<pre><code>import { createAccessPolicy } from '@charles2ke/platform-shared/auth';
+
+const policy = createAccessPolicy({
+  'profile.get': { permissions: ['profile:read'] },
+  'profile.update': { permissions: ['profile:write'] },
+  'profile.delete': { roles: ['admin'] }
+}, { roleRegistry });
+
+const profiles = new ProfileService({ store, policy });
+await profiles.update(id, { timezone: 'Africa/Nairobi' }, { principal });</code></pre>
+</section>
+
+<section id="profile">
+  <h2>Profiles: one canonical model</h2>
+  <p>
+    A single profile shape — <code>id</code>, <code>displayName</code>, <code>contact</code>,
+    <code>preferences</code>, <code>timezone</code>, <code>locale</code>, <code>avatarUrl</code>,
+    <code>status</code>, <code>metadata</code> — with normalization for display names, emails,
+    locale/timezone defaults, and status values.
+  </p>
+<pre><code>import { InMemoryProfileStore, ProfileService } from '@charles2ke/platform-shared/profile';
+
+const profiles = new ProfileService({
+  store: new InMemoryProfileStore(),
+  defaults: { locale: 'en-US', timezone: 'UTC' }
+});
+
+const profile = await profiles.create({
+  displayName: 'Charles',
+  contact: { email: 'charles@example.com' },
+  preferences: { units: 'metric' }
+});</code></pre>
+  <p>
+    Swap <code>InMemoryProfileStore</code> for an app-owned adapter by extending
+    <code>ProfileStore</code>; unimplemented methods throw structured errors instead of failing
+    silently.
+  </p>
+</section>
+
+<section id="notifications">
+  <h2>Notifications: send, schedule, retry, replay</h2>
+  <div class="grid">
+    <div class="card">
+      <h3>Delivery</h3>
+      <p>One API for email, SMS, and push. <code>{{variable}}</code> template rendering and
+      delivery statuses of <code>sent</code>, <code>failed</code>, <code>partial</code>, or <code>pending</code>.</p>
+    </div>
+    <div class="card">
+      <h3>Scheduling</h3>
+      <p><code>schedule()</code>, <code>listScheduled()</code>, <code>cancelScheduled()</code>, and
+      <code>dispatchScheduled()</code> for cron or worker drains, with pluggable queue adapters.</p>
+    </div>
+    <div class="card">
+      <h3>Resilience</h3>
+      <p>Exponential backoff (<code>retryDelayMs * factor ** (attempts - 1)</code>, capped),
+      per-channel retry of partial failures, dead-letter capture, and <code>replayDeadLetters()</code>.</p>
+    </div>
+  </div>
+<pre><code>import {
+  CHANNELS,
+  InMemoryDeadLetterQueue,
+  InMemoryNotificationScheduler,
+  MockChannelAdapter,
+  NotificationService
+} from '@charles2ke/platform-shared/notifications';
+
+const notifications = new NotificationService({
+  adapters: {
+    [CHANNELS.EMAIL]: new MockChannelAdapter({ channel: CHANNELS.EMAIL }),
+    [CHANNELS.PUSH]: new MockChannelAdapter({ channel: CHANNELS.PUSH })
+  },
+  scheduler: new InMemoryNotificationScheduler(),
+  deadLetterStore: new InMemoryDeadLetterQueue(),
+  maxScheduleAttempts: 4,
+  retryDelayMs: 30_000,
+  retryBackoffFactor: 2,
+  maxRetryDelayMs: 15 * 60_000
+});
+
+await notifications.send({
+  channels: [CHANNELS.EMAIL, CHANNELS.PUSH],
+  to: { email: 'user@example.com', userId: 'user-123' },
+  subject: 'Welcome {{name}}',
+  body: 'Hi {{name}}, your account is ready.',
+  variables: { name: 'Charles' }
+});
+
+await notifications.schedule(reminder, new Date(Date.now() + 60_000));
+
+const { processed, retried, deadLettered, pending, pendingKnown } =
+  await notifications.dispatchScheduled();</code></pre>
+</section>
+
+<section id="adapters">
+  <h2>Adapters: framework and provider glue</h2>
+  <table>
+    <thead><tr><th>Export</th><th>Use</th></tr></thead>
+    <tbody>
+      <tr><td><code>createExpressAuthMiddleware(guard, { requirements })</code></td><td>Mount a guard in Express/Connect with the shared error envelope.</td></tr>
+      <tr><td><code>withFetchAuth(handler, guard, requirements)</code></td><td>Guard fetch-style handlers (Next.js, Hono, workers).</td></tr>
+      <tr><td><code>toHttpErrorResponse(error)</code></td><td>Map any error to <code>{ status, body }</code> for consistent API responses.</td></tr>
+      <tr><td><code>HttpChannelAdapter</code></td><td>POST rendered notifications to a provider endpoint with headers, transform, and timeout options.</td></tr>
+      <tr><td><code>createNotificationWorker(service, { intervalMs })</code></td><td>Drain scheduled notifications via <code>runOnce()</code> (cron) or <code>start()</code>/<code>stop()</code> (worker).</td></tr>
+      <tr><td><code>replayDeadLetters({ service, store })</code></td><td>Re-queue dead-lettered notifications after an outage.</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section id="shared">
+  <h2>Shared: config, errors, logging</h2>
+  <ul>
+    <li><code>loadConfig()</code> reads and validates environment configuration.</li>
+    <li><code>PlatformError</code> carries a stable <code>code</code>, HTTP <code>status</code>, message, and details.</li>
+    <li>Logger hooks accept any object exposing <code>debug</code>, <code>info</code>, <code>warn</code>, and <code>error</code>.</li>
+  </ul>
+</section>
+
+<section id="hardening">
+  <h2>Enterprise hardening</h2>
+  <div class="grid">
+    <div class="card">
+      <h3>Supply chain</h3>
+      <ul>
+        <li>No runtime dependencies</li>
+        <li>Dependabot for npm and GitHub Actions</li>
+        <li><code>npm audit</code> gate in CI</li>
+        <li>npm provenance on publish</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>Code security</h3>
+      <ul>
+        <li>CodeQL <code>security-extended</code> on push, PR, and weekly</li>
+        <li>Least-privilege workflow permissions</li>
+        <li>Credentials never persisted in checkouts</li>
+        <li>Private vulnerability reporting in <code>SECURITY.md</code></li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>Runtime safety</h3>
+      <ul>
+        <li>Constant-time JWT signature comparison</li>
+        <li>Explicit issuer, audience, and expiry checks</li>
+        <li>Synchronous revocation so guards cannot be bypassed</li>
+        <li>Structured errors that do not leak internals</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>Delivery quality</h3>
+      <ul>
+        <li>CI matrix on Node 22 and 24</li>
+        <li>Executable examples covered by tests</li>
+        <li>Issue, PR, and ownership templates</li>
+        <li>Semantic versioning with migration notes</li>
+      </ul>
+    </div>
+  </div>
+  <p>
+    Operators must still set a 32+ character <code>PLATFORM_JWT_SECRET</code>, back revocation with
+    a shared store across instances, keep access-token TTLs short, terminate TLS in front of
+    guarded services, and monitor dead-letter records.
+  </p>
+</section>
+
+<section id="config">
+  <h2>Environment variables</h2>
+  <table>
+    <thead><tr><th>Variable</th><th>Required</th><th>Purpose</th></tr></thead>
+    <tbody>
+      <tr><td><code>PLATFORM_JWT_SECRET</code></td><td>Production</td><td>JWT HMAC secret; at least 32 random characters.</td></tr>
+      <tr><td><code>PLATFORM_JWT_ISSUER</code></td><td>No</td><td>Issuer claim, defaults to <code>platform-shared</code>.</td></tr>
+      <tr><td><code>PLATFORM_JWT_AUDIENCE</code></td><td>No</td><td>App or API audience to verify.</td></tr>
+      <tr><td><code>PLATFORM_JWT_ACCESS_TTL_SECONDS</code></td><td>No</td><td>Access token TTL, defaults to 900.</td></tr>
+      <tr><td><code>PLATFORM_JWT_REFRESH_TTL_SECONDS</code></td><td>No</td><td>Refresh token TTL, defaults to 30 days.</td></tr>
+      <tr><td><code>PLATFORM_DEFAULT_LOCALE</code></td><td>No</td><td>Profile default locale, defaults to <code>en-US</code>.</td></tr>
+      <tr><td><code>PLATFORM_DEFAULT_TIMEZONE</code></td><td>No</td><td>Profile default timezone, defaults to <code>UTC</code>.</td></tr>
+      <tr><td><code>PLATFORM_DEFAULT_FROM_EMAIL</code></td><td>No</td><td>Default email sender for provider adapters.</td></tr>
+      <tr><td><code>PLATFORM_DEFAULT_SMS_SENDER</code></td><td>No</td><td>Default SMS sender for provider adapters.</td></tr>
+      <tr><td><code>PLATFORM_DEFAULT_PUSH_SENDER</code></td><td>No</td><td>Default push sender for provider adapters.</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section id="examples">
+  <h2>Executable examples</h2>
+  <p>Every example in <code>examples/</code> runs under <code>tests/examples.test.js</code>, so the documented flows cannot silently rot.</p>
+  <table>
+    <thead><tr><th>Example</th><th>Shows</th></tr></thead>
+    <tbody>
+      <tr><td><code>social.js</code></td><td>Login, guarded routes, refresh rotation with replay detection, session introspection, single/session/global logout, role registry.</td></tr>
+      <tr><td><code>workout.js</code></td><td>Inherited-role permissions, <code>authorize()</code> in service code, scheduled push nudges with backoff, cancellation, dead lettering.</td></tr>
+      <tr><td><code>travel.js</code></td><td>Immediate and scheduled multi-channel reminders drained by a worker, pending listing, cancellation, dead-letter capture and replay.</td></tr>
+      <tr><td><code>basa.js</code></td><td>RBAC-guarded order operations, policy-enforced profile CRUD, scheduled email/SMS order updates.</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Adoption path for a consuming app</h3>
+  <ul>
+    <li>Install or vendor the package, then load env values with <code>loadConfig()</code>.</li>
+    <li>Wrap <code>createAuthGuard()</code> in the app router, or mount the Express/fetch adapter.</li>
+    <li>Replace in-memory stores with app-owned persistence by extending the shipped interfaces.</li>
+    <li>Standardize role and permission names across apps before enabling policies in production.</li>
+    <li>Keep domain logic in the app; keep identity, profile, and notification contracts here.</li>
+  </ul>
+</section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <p>
+      MIT licensed &middot;
+      <a href="https://github.com/charles2ke/platform-shared">Source</a> &middot;
+      <a href="https://github.com/charles2ke/platform-shared/blob/main/SECURITY.md">Security policy</a> &middot;
+      <a href="https://github.com/charles2ke/platform-shared/blob/main/CONTRIBUTING.md">Contributing</a> &middot;
+      <a href="https://github.com/charles2ke/platform-shared/issues">Issues</a>
+    </p>
+  </div>
+</footer>
+</body>
+</html>
