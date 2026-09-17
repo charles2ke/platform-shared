@@ -34,8 +34,9 @@ security, persistence, and secret storage. The library provides:
   unawaited promise.
 - Action-keyed access policies (`createAccessPolicy()`) so RBAC is enforced in
   services, jobs, and queue consumers, not just HTTP routes.
-- Structured `PlatformError`s that avoid leaking internals through HTTP responses
-  (`toHttpErrorResponse()`).
+- Structured `PlatformError`s that give consumers a consistent HTTP error envelope
+  (`toHttpErrorResponse()`); it does not sanitize `error.message` or `PlatformError.details`, so
+  callers are responsible for not putting sensitive data into either.
 
 ## Operational requirements for consumers
 
