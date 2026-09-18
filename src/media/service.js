@@ -85,21 +85,22 @@ export class MediaTranscodingService {
    */
   async submit(input, options = {}) {
     this.#enforce('media.transcode.submit', options);
+    if (!this.publisher) {
+      throw createError('MEDIA_NO_PUBLISHER', 'submit() requires a publisher; use run() for synchronous execution', { status: 500 });
+    }
     const job = normalizeTranscodeJob({ ...input, id: input?.id ?? randomUUID() });
     job.id ??= randomUUID();
 
-    if (this.publisher) {
-      await this.publisher.publish({
-        id: job.id,
-        type: 'media.transcode.requested',
-        occurredAt: this.now().toISOString(),
-        key: job.id,
-        payload: job
-      });
-    }
+    await this.publisher.publish({
+      id: job.id,
+      type: 'media.transcode.requested',
+      occurredAt: this.now().toISOString(),
+      key: job.id,
+      payload: job
+    });
 
     this.submitted?.inc({ kind: job.kind, format: job.format });
-    return { id: job.id, status: this.publisher ? TRANSCODE_STATUS.QUEUED : TRANSCODE_STATUS.RUNNING, job };
+    return { id: job.id, status: TRANSCODE_STATUS.QUEUED, job };
   }
 
   /**
