@@ -1,5 +1,10 @@
 export * as adapters from './adapters/index.js';
 export * as auth from './auth/index.js';
+export * as cache from './cache/index.js';
+export * as media from './media/index.js';
 export * as notifications from './notifications/index.js';
 export * as profile from './profile/index.js';
+export * as runtime from './runtime/index.js';
 export * as shared from './shared/index.js';
+export * as storage from './storage/index.js';
+export * as streaming from './streaming/index.js';

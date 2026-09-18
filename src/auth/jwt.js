@@ -3,6 +3,9 @@ import { createError } from '../shared/errors.js';
 
 const textEncoder = new TextEncoder();
 
+// Bounds the work an unauthenticated caller can force per verification.
+const MAX_TOKEN_LENGTH = 8192;
+
 function base64UrlEncode(value) {
   const buffer = typeof value === 'string' ? Buffer.from(value) : Buffer.from(JSON.stringify(value));
   return buffer.toString('base64url');
@@ -23,6 +26,15 @@ function sign(input, secret) {
 function assertSecret(secret) {
   if (!secret || typeof secret !== 'string' || secret.length < 32) {
     throw createError('AUTH_MISSING_SECRET', 'A JWT secret is required', { status: 500 });
+  }
+}
+
+function assertTokenShape(token) {
+  if (typeof token !== 'string') {
+    throw createError('AUTH_INVALID_TOKEN', 'Token must be a string', { status: 401 });
+  }
+  if (token.length > MAX_TOKEN_LENGTH) {
+    throw createError('AUTH_TOKEN_TOO_LARGE', `Token must be at most ${MAX_TOKEN_LENGTH} characters`, { status: 401 });
   }
 }
 
@@ -58,9 +70,7 @@ export function issueToken({ subject, roles = [], permissions = [], claims = {},
 
 export function verifyToken(token, { secret, issuer, audience, now = new Date(), clockToleranceSeconds = 0, expectedUse, revocationStore } = {}) {
   assertSecret(secret);
-  if (typeof token !== 'string') {
-    throw createError('AUTH_INVALID_TOKEN', 'Token must be a string', { status: 401 });
-  }
+  assertTokenShape(token);
 
   const parts = token.split('.');
   if (parts.length !== 3) {
@@ -115,9 +125,7 @@ export function verifyToken(token, { secret, issuer, audience, now = new Date(),
  * debugging, or routing decisions; never for authorization.
  */
 export function decodeToken(token) {
-  if (typeof token !== 'string') {
-    throw createError('AUTH_INVALID_TOKEN', 'Token must be a string', { status: 401 });
-  }
+  assertTokenShape(token);
 
   const parts = token.split('.');
   if (parts.length !== 3) {
