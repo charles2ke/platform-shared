@@ -5,7 +5,7 @@ Shared platform foundations for authentication, profiles, and notifications acro
 Documentation site: <https://charles2ke.github.io/platform-shared/> (published from `docs/`).
 
 - **Runtime:** Node.js >= 22, ES modules, zero runtime dependencies.
-- **Quality gates:** CI test matrix (Node 22 and 24), syntax checks, `npm audit`, CodeQL `security-extended`, Dependabot for npm and GitHub Actions.
+- **Quality gates:** CI test matrix (Node 22 and 24), syntax checks, `npm audit`, CodeQL default setup, Dependabot for npm and GitHub Actions.
 - **Governance:** [`SECURITY.md`](SECURITY.md), [`CONTRIBUTING.md`](CONTRIBUTING.md), [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md), issue/PR templates, and `CODEOWNERS`.
 
 ## Architecture overview
@@ -359,7 +359,7 @@ npm run audit          # production dependency audit (high severity and above)
 | --- | --- | --- |
 | Tests + syntax checks on Node 22/24 | `.github/workflows/ci.yml` | push, pull request, manual |
 | Production dependency audit | `.github/workflows/ci.yml` | push, pull request, manual |
-| CodeQL `security-extended` analysis | `.github/workflows/codeql.yml` | push, pull request, weekly |
+| CodeQL analysis | GitHub code scanning default setup | push, pull request, weekly |
 | Dependency version updates | `.github/dependabot.yml` | weekly |
 | Documentation site deploy | `.github/workflows/pages.yml` | push to `main` touching `docs/` |
 

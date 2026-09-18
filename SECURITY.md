@@ -53,7 +53,7 @@ security, persistence, and secret storage. The library provides:
 
 - CI runs the full test suite and syntax checks on every push to `main` and every pull
   request targeting `main`.
-- CodeQL (`security-extended`) scans on push to `main`, pull requests targeting `main`,
-  and weekly.
+- CodeQL runs through GitHub code scanning default setup on push to `main`, pull
+  requests targeting `main`, and weekly.
 - Dependabot watches npm and GitHub Actions versions weekly.
 - Workflows run with least-privilege `permissions` and without persisted credentials.
