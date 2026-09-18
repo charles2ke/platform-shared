@@ -2,6 +2,12 @@
 
 Shared platform foundations for authentication, profiles, and notifications across `social`, `travel`, `workout`, and `basa`.
 
+Documentation site: <https://charles2ke.github.io/platform-shared/> (published from `docs/`).
+
+- **Runtime:** Node.js >= 22, ES modules, zero runtime dependencies.
+- **Quality gates:** CI test matrix (Node 22 and 24), syntax checks, `npm audit`, CodeQL `security-extended`, Dependabot for npm and GitHub Actions.
+- **Governance:** [`SECURITY.md`](SECURITY.md), [`CONTRIBUTING.md`](CONTRIBUTING.md), [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md), issue/PR templates, and `CODEOWNERS`.
+
 ## Architecture overview
 
 This package is intentionally framework-light and dependency-free. Core business logic lives in reusable modules under `src/`, while app-specific HTTP, queue, or serverless integration should wrap these modules in each downstream repository.
@@ -327,11 +333,67 @@ See `examples/social.js`, `examples/travel.js`, `examples/workout.js`, and `exam
 This repository uses Node's built-in test runner and has no external runtime dependencies.
 
 ```bash
-npm test
-npm run build
+npm test           # unit and example tests
+npm run build      # syntax checks across src, tests, examples, scripts
+npm run check      # build + test (run this before opening a pull request)
+npm run test:coverage  # tests with Node's experimental coverage report
+npm run audit          # production dependency audit (high severity and above)
 ```
 
 `npm run build` performs syntax checks across source, tests, examples, and scripts.
+
+## Enterprise readiness
+
+### Dependencies and supported runtimes
+
+- The package has **no runtime dependencies** and no build-time dependencies, so there is no
+  transitive supply-chain surface to patch. A committed `package-lock.json` keeps installs
+  reproducible, and `npm audit --omit=dev --audit-level=high` runs in CI and reports no advisories.
+- `engines.node` is `>=22`; CI verifies Node 22 and Node 24.
+- Dependabot watches npm and GitHub Actions weekly, and all workflows pin the latest stable major
+  versions of the actions they use.
+
+### Automated controls
+
+| Control | Where | Trigger |
+| --- | --- | --- |
+| Tests + syntax checks on Node 22/24 | `.github/workflows/ci.yml` | push, pull request, manual |
+| Production dependency audit | `.github/workflows/ci.yml` | push, pull request, manual |
+| CodeQL `security-extended` analysis | `.github/workflows/codeql.yml` | push, pull request, weekly |
+| Dependency version updates | `.github/dependabot.yml` | weekly |
+| Documentation site deploy | `.github/workflows/pages.yml` | push to `main` touching `docs/` |
+
+Workflows declare least-privilege `permissions` and check out without persisting credentials.
+
+### Hardening built into the modules
+
+- HS256 signatures are compared in constant time, and `issuer`, `audience`, and expiry claims are
+  verified explicitly.
+- Refresh-token rotation detects replay and revokes the affected sessions.
+- Revocation stores are synchronous, so a guard cannot be bypassed by an unawaited promise.
+- Access policies are action-keyed, so the same requirements apply to HTTP routes, jobs, and queue
+  consumers.
+- Errors are structured `PlatformError`s, and `toHttpErrorResponse()` maps them to a consistent
+  `{ status, body }` envelope; it does not sanitize `error.message` or `PlatformError.details`, so
+  callers must avoid putting sensitive data in either.
+
+### Operator checklist
+
+- [ ] `PLATFORM_JWT_SECRET` is at least 32 random characters, stored in a secret manager, and rotated on a schedule.
+- [ ] Token revocation is backed by a shared store or cache when running more than one instance.
+- [ ] Access-token TTLs stay short and refresh rotation is enabled.
+- [ ] TLS terminates in front of every guarded service.
+- [ ] Dead-letter records are monitored and replayed after provider outages.
+
+See [`SECURITY.md`](SECURITY.md) for the vulnerability reporting process and the full security model.
+
+## Documentation site
+
+`docs/index.html` is a dependency-free single-page site covering every module, feature, and
+hardening control in this repository. It is deployed to GitHub Pages by
+`.github/workflows/pages.yml` whenever `docs/` changes on `main`. Enable it once under
+**Settings → Pages → Build and deployment → GitHub Actions**. Update the site alongside `README.md`
+whenever public behavior changes.
 
 ## Architecture decisions and next steps
 
