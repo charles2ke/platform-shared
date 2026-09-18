@@ -3,6 +3,7 @@ import { noopLogger } from '../shared/logger.js';
 import { createResiliencePolicy } from '../shared/resilience.js';
 import { ProfileStore } from '../profile/memory-store.js';
 import { DeadLetterStore } from '../notifications/dead-letter.js';
+import { encryptJSON, decryptJSON } from '../shared/crypto.js';
 
 /**
  * MongoDB-backed persistence. The driver is injected (a `Collection` from the
@@ -153,16 +154,21 @@ export class MongoDeadLetterStore extends DeadLetterStore {
   #policy;
   #ttlSeconds;
   #maxDrain;
+  #encryptionKey;
 
-  constructor({ collection, logger = noopLogger, timeoutMs, retry, breaker, ttlSeconds = 1_209_600, maxDrain = 500 } = {}) {
+  constructor({ collection, logger = noopLogger, timeoutMs, retry, breaker, ttlSeconds = 1_209_600, maxDrain = 500, encryptionKey } = {}) {
     super();
     if (!collection || typeof collection.insertOne !== 'function') {
       throw createError('MONGO_INVALID_COLLECTION', 'A MongoDB collection is required', { status: 500 });
+    }
+    if (typeof encryptionKey !== 'string' || encryptionKey.length < 16) {
+      throw createError('MONGO_INVALID_ENCRYPTION_KEY', 'encryptionKey must be a string of at least 16 characters; dead-letter records carry PII and must be encrypted at rest', { status: 500 });
     }
     this.#collection = collection;
     this.#policy = createPolicy('mongo:dead-letters', { timeoutMs, retry, breaker, logger });
     this.#ttlSeconds = ttlSeconds;
     this.#maxDrain = maxDrain;
+    this.#encryptionKey = encryptionKey;
   }
 
   async ensureIndexes() {
@@ -174,21 +180,46 @@ export class MongoDeadLetterStore extends DeadLetterStore {
     return true;
   }
 
+  /**
+   * Reconstructs a plain record from a stored document. `notification`, `job`,
+   * and any other caller-supplied fields are recovered from the encrypted
+   * blob; only the opaque notification id and scheduling metadata are ever
+   * stored in plain text.
+   */
+  #toRecord(document) {
+    const decrypted = decryptJSON(document.encrypted, this.#encryptionKey);
+    return {
+      ...decrypted,
+      attempts: document.attempts,
+      reason: document.reason,
+      failedAt: document.failedAt instanceof Date ? document.failedAt.toISOString() : document.failedAt
+    };
+  }
+
   async add(record) {
     if (!record || typeof record !== 'object' || !record.notification) {
       throw createError('NOTIFICATION_INVALID_DEAD_LETTER_RECORD', 'Dead-letter records must include a notification', { status: 500 });
     }
-    const stored = { ...record, failedAt: new Date(record.failedAt ?? Date.now()) };
+    const { notification, failedAt, attempts, reason, ...rest } = record;
+    const encrypted = encryptJSON({ notification, ...rest }, this.#encryptionKey);
+    const stored = {
+      notification: { id: notification?.id },
+      failedAt: new Date(failedAt ?? Date.now()),
+      attempts,
+      reason,
+      encrypted
+    };
     await this.#policy.execute(() => this.#collection.insertOne(stored));
     return { ...record, failedAt: stored.failedAt.toISOString() };
   }
 
   async list({ limit = this.#maxDrain } = {}) {
     const documents = await this.#policy.execute(() => this.#collection
-      .find({}, { projection: { _id: 0 } })
+      .find({})
+      .sort({ failedAt: 1 })
       .limit(Math.min(limit, this.#maxDrain))
       .toArray());
-    return documents.map(stripInternalFields);
+    return documents.map((document) => this.#toRecord(document));
   }
 
   async remove(notificationId) {
@@ -197,13 +228,21 @@ export class MongoDeadLetterStore extends DeadLetterStore {
     return result?.deletedCount ?? 0;
   }
 
-  /** Drains a bounded page so replay cannot load the whole backlog at once. */
+  /**
+   * Drains a bounded page, claiming and deleting one document at a time by its
+   * unique `_id` so a record cannot be lost or double-processed by racing with
+   * concurrent inserts/removals of the same notification id.
+   */
   async drain({ limit = this.#maxDrain } = {}) {
-    const records = await this.list({ limit });
-    for (const record of records) {
-      if (typeof record.notification?.id === 'string') {
-        await this.remove(record.notification.id);
+    const bound = Math.min(Number.isInteger(limit) && limit > 0 ? limit : this.#maxDrain, this.#maxDrain);
+    const records = [];
+    for (let i = 0; i < bound; i += 1) {
+      const result = await this.#policy.execute(() => this.#collection.findOneAndDelete({}, { sort: { failedAt: 1 } }));
+      const document = result && Object.prototype.hasOwnProperty.call(result, 'value') ? result.value : result;
+      if (!document) {
+        break;
       }
+      records.push(this.#toRecord(document));
     }
     return records;
   }
