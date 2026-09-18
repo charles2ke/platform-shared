@@ -112,9 +112,14 @@ export function createMetricsRegistry({ maxSeriesPerMetric = 500, prefix = '' } 
         }
       };
     },
-    /** Drops every recorded series; used by tests and after a scale-down drain. */
+    /** Drops every recorded series while keeping registrations; used by tests
+     * and after a scale-down drain. Handles returned by `counter()`/`gauge()`/
+     * `histogram()` stay valid because they close over the registered entry,
+     * not over `metrics` itself. */
     reset() {
-      metrics.clear();
+      for (const entry of metrics.values()) {
+        entry.series.clear();
+      }
     },
     /** Prometheus text exposition format (`/metrics`). */
     render() {

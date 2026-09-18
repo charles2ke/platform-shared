@@ -21,6 +21,7 @@ export function createHealthRegistry({
   let started = false;
   let lastResult;
   let lastResultAt = 0;
+  let pendingReady;
 
   async function runCheck(name, check) {
     const startedAt = now();
@@ -80,12 +81,27 @@ export function createHealthRegistry({
       if (lastResult && now() - lastResultAt < cacheMs) {
         return lastResult;
       }
+      // Share the in-flight readiness check across concurrent callers so a
+      // burst of /readyz requests arriving after expiry runs the dependency
+      // checks once, not once per request.
+      if (pendingReady) {
+        return pendingReady;
+      }
 
-      const results = await Promise.all([...checks].map(([name, check]) => runCheck(name, check)));
-      const failedCritical = results.some((result) => result.critical && result.status === 'fail');
-      lastResult = { status: failedCritical || !started ? 'unready' : 'ok', checks: results };
-      lastResultAt = now();
-      return lastResult;
+      pendingReady = (async () => {
+        const results = await Promise.all([...checks].map(([name, check]) => runCheck(name, check)));
+        const failedCritical = results.some((result) => result.critical && result.status === 'fail');
+        const result = { status: failedCritical || !started ? 'unready' : 'ok', checks: results };
+        lastResult = result;
+        lastResultAt = now();
+        return result;
+      })();
+
+      try {
+        return await pendingReady;
+      } finally {
+        pendingReady = undefined;
+      }
     }
   };
 }
