@@ -100,6 +100,11 @@ export function createRoleRegistry(definitions = {}) {
     normalized.set(role, { permissions, inherits });
   }
 
+  // Per-role expansions are precomputed once. Only roles defined in the
+  // registry are cached, so attacker-supplied token roles cannot grow memory.
+  const roleExpansions = new Map();
+  const permissionExpansions = new Map();
+
   function rolesForRole(role, seen = new Set()) {
     if (seen.has(role) || !normalized.has(role)) {
       return seen.has(role) ? [] : [role];
@@ -124,19 +129,38 @@ export function createRoleRegistry(definitions = {}) {
     ];
   }
 
+  for (const role of normalized.keys()) {
+    roleExpansions.set(role, Object.freeze([...new Set(rolesForRole(role))]));
+    permissionExpansions.set(role, Object.freeze([...new Set(permissionsForRole(role))]));
+  }
+
+  function expand(roles, expansions, includeUnknownRole) {
+    const roleList = normalizeRequirements(roles) ?? [];
+    const resolved = new Set();
+    for (const role of roleList) {
+      const expansion = expansions.get(role);
+      if (expansion === undefined) {
+        if (includeUnknownRole) {
+          resolved.add(role);
+        }
+        continue;
+      }
+      for (const value of expansion) {
+        resolved.add(value);
+      }
+    }
+    return [...resolved];
+  }
+
   return {
     roles: () => [...normalized.keys()],
     /** Expands the supplied roles into themselves plus every inherited role. */
     rolesFor(roles = []) {
-      const roleList = normalizeRequirements(roles) ?? [];
-      const seen = new Set();
-      return [...new Set(roleList.flatMap((role) => rolesForRole(role, seen)))];
+      return expand(roles, roleExpansions, true);
     },
     /** Resolves the effective permissions granted by the supplied roles. */
     permissionsFor(roles = []) {
-      const roleList = normalizeRequirements(roles) ?? [];
-      const seen = new Set();
-      return [...new Set(roleList.flatMap((role) => permissionsForRole(role, seen)))];
+      return expand(roles, permissionExpansions, false);
     }
   };
 }

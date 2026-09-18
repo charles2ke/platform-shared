@@ -5,10 +5,16 @@
   "keywords": [
     "auth",
     "jwt",
-    "rbac",
-    "profile",
+    "kafka",
+    "kubernetes",
+    "mongodb",
     "notifications",
-    "platform"
+    "observability",
+    "platform",
+    "profile",
+    "rbac",
+    "redis",
+    "transcoding"
   ],
   "homepage": "https://charles2ke.github.io/platform-shared/",
   "repository": {
@@ -25,18 +31,24 @@
   "main": "./src/index.js",
   "exports": {
     ".": "./src/index.js",
-    "./auth": "./src/auth/index.js",
-    "./profile": "./src/profile/index.js",
-    "./notifications": "./src/notifications/index.js",
-    "./shared": "./src/shared/index.js",
     "./adapters": "./src/adapters/index.js",
-    "./package.json": "./package.json"
+    "./auth": "./src/auth/index.js",
+    "./cache": "./src/cache/index.js",
+    "./media": "./src/media/index.js",
+    "./notifications": "./src/notifications/index.js",
+    "./package.json": "./package.json",
+    "./profile": "./src/profile/index.js",
+    "./runtime": "./src/runtime/index.js",
+    "./shared": "./src/shared/index.js",
+    "./storage": "./src/storage/index.js",
+    "./streaming": "./src/streaming/index.js"
   },
   "files": [
-    "src",
+    "LICENSE",
     "README.md",
     "SECURITY.md",
-    "LICENSE"
+    "deploy",
+    "src"
   ],
   "scripts": {
     "build": "node scripts/check-syntax.js",

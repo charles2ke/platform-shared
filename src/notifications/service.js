@@ -4,6 +4,9 @@ import { noopLogger } from '../shared/logger.js';
 import { renderTemplate } from './template.js';
 import { CHANNELS, DELIVERY_STATUS } from './types.js';
 
+// Precomputed once: channel validation runs on every send and every retry.
+const SUPPORTED_CHANNELS = new Set(Object.values(CHANNELS));
+
 export class NotificationService {
   #scheduled = [];
 
@@ -106,7 +109,7 @@ export class NotificationService {
       }
       await this.scheduler.enqueue(notification, scheduledFor);
     } else {
-      this.#scheduled.push({ notification, scheduledFor: scheduledFor.toISOString(), attempts: 0 });
+      this.#scheduled.push({ notification, scheduledFor: scheduledFor.toISOString(), scheduledAt: scheduledFor.getTime(), attempts: 0 });
     }
 
     return {
@@ -121,7 +124,7 @@ export class NotificationService {
   async listScheduled(options = {}) {
     this.#enforce('notification.list', options);
     if (!this.scheduler) {
-      return this.#scheduled.map((entry) => ({ ...entry }));
+      return this.#scheduled.map(({ scheduledAt, ...entry }) => ({ ...entry }));
     }
 
     if (typeof this.scheduler.list !== 'function') {
@@ -235,9 +238,11 @@ export class NotificationService {
     if (!this.scheduler) {
       const dueEntries = [];
       const pendingEntries = [];
+      const nowMs = nowDate.getTime();
 
       for (const entry of this.#scheduled) {
-        if (new Date(entry.scheduledFor) <= nowDate) {
+        const scheduledAt = entry.scheduledAt ?? Date.parse(entry.scheduledFor);
+        if (scheduledAt <= nowMs) {
           dueEntries.push(entry);
         } else {
           pendingEntries.push(entry);
@@ -328,11 +333,13 @@ export class NotificationService {
       return undefined;
     }
 
+    const scheduledAt = nowDate.getTime() + this.retryDelayFor(attempts);
     return {
       ...entry,
       notification: retryNotification(entry.notification, failedChannels),
       attempts,
-      scheduledFor: new Date(nowDate.getTime() + this.retryDelayFor(attempts)).toISOString()
+      scheduledAt,
+      scheduledFor: new Date(scheduledAt).toISOString()
     };
   }
 }
@@ -354,7 +361,8 @@ function retryNotification(notification, failedChannels) {
     return notification;
   }
 
-  const retryChannels = channels.filter((channel) => failedChannels.includes(channel));
+  const failedChannelSet = new Set(failedChannels);
+  const retryChannels = channels.filter((channel) => failedChannelSet.has(channel));
   if (retryChannels.length === 0) {
     return notification;
   }
@@ -376,7 +384,7 @@ function normalizeChannels(notification) {
   }
 
   for (const channel of channels) {
-    if (typeof channel !== 'string' || !Object.values(CHANNELS).includes(channel)) {
+    if (typeof channel !== 'string' || !SUPPORTED_CHANNELS.has(channel)) {
       throw createError('NOTIFICATION_INVALID_CHANNEL', `Unsupported notification channel: ${String(channel)}`, { status: 400, details: { channel } });
     }
   }
