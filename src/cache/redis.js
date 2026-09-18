@@ -80,7 +80,8 @@ export function createRedisCache({
   metrics,
   localCache = createLruCache(),
   timeoutMs = 250,
-  chaos
+  chaos,
+  subscriber
 } = {}) {
   if (!client || typeof client.get !== 'function' || typeof client.set !== 'function') {
     throw createError('CACHE_INVALID_CLIENT', 'A Redis client with get() and set() is required', { status: 500 });
@@ -101,8 +102,45 @@ export function createRedisCache({
   const misses = metrics?.counter('cache_misses_total', 'Cache misses');
   const errors = metrics?.counter('cache_errors_total', 'Cache backend errors (fail-open)');
   const inFlight = new Map();
+  // Local per-key tombstones cover the window where a Redis delete failed but
+  // the caller was still told invalidation succeeded (fail-open): while a key
+  // is tombstoned this pod treats Redis as untrustworthy for it instead of
+  // serving the stale value back out of the cache.
+  const tombstones = new Map();
+  const invalidationChannel = `${namespace}:cache-invalidate`;
+  let stopSubscription;
+
+  if (subscriber && typeof subscriber.subscribe === 'function' && typeof subscriber.on === 'function') {
+    subscriber.subscribe(invalidationChannel, (error) => {
+      if (error) {
+        logger.warn?.('Redis cache invalidation subscribe failed', { code: normalizeError(error).code });
+      }
+    });
+    const onMessage = (channel, key) => {
+      if (channel === invalidationChannel) {
+        localCache?.delete(key);
+      }
+    };
+    subscriber.on('message', onMessage);
+    stopSubscription = () => {
+      subscriber.off?.('message', onMessage);
+      subscriber.unsubscribe?.(invalidationChannel);
+    };
+  }
 
   const keyFor = (key) => `${namespace}:${key}`;
+
+  function isTombstoned(key) {
+    const expiresAt = tombstones.get(key);
+    if (expiresAt === undefined) {
+      return false;
+    }
+    if (expiresAt <= Date.now()) {
+      tombstones.delete(key);
+      return false;
+    }
+    return true;
+  }
 
   async function guarded(operation, fallback) {
     try {
@@ -116,11 +154,24 @@ export function createRedisCache({
     }
   }
 
+  /** Best-effort fan-out so other pods evict their local LRU tier too. */
+  async function publishInvalidation(key) {
+    if (typeof client.publish !== 'function') {
+      return;
+    }
+    await guarded(() => client.publish(invalidationChannel, key), undefined);
+  }
+
   async function get(key) {
     const local = localCache?.get(key);
     if (local !== undefined) {
       hits?.inc({ namespace, tier: 'local' });
       return local;
+    }
+
+    if (isTombstoned(key)) {
+      misses?.inc({ namespace });
+      return undefined;
     }
 
     const raw = await guarded(() => client.get(keyFor(key)), null);
@@ -153,7 +204,17 @@ export function createRedisCache({
     if (typeof client.del !== 'function') {
       return false;
     }
-    await guarded(() => client.del(keyFor(key)), undefined);
+    const failureToken = Symbol('cache-del-failed');
+    const result = await guarded(() => client.del(keyFor(key)), failureToken);
+    if (result === failureToken) {
+      // Redis invalidation failed but the request path still fails open:
+      // record a tombstone so this pod won't serve the stale remote value
+      // until it naturally expires (or a later delete succeeds).
+      tombstones.set(key, Date.now() + ttlSeconds * 1000);
+    } else {
+      tombstones.delete(key);
+      await publishInvalidation(key);
+    }
     return true;
   }
 
@@ -164,6 +225,8 @@ export function createRedisCache({
     delete: del,
     stats: () => ({ ...policy.stats(), inFlight: inFlight.size, localEntries: localCache?.size?.() }),
     healthy: () => policy.healthy(),
+    /** Stops the pub/sub subscription, for graceful pod shutdown. */
+    close: () => stopSubscription?.(),
     /** Read-through with single-flight loading per key. */
     async getOrLoad(key, loader, options = {}) {
       const cached = await get(key);
@@ -193,7 +256,9 @@ export function createRedisCache({
 /**
  * Read-through cache decorator for any `ProfileStore` (Mongo in production).
  * Writes invalidate immediately so a scaled-out deployment never serves a stale
- * profile after an update, and negative results are not cached.
+ * profile after an update, and negative results are not cached. Cross-pod
+ * staleness (other pods' independent in-process LRU tiers) is closed by the
+ * underlying cache's Redis pub/sub fan-out when a `subscriber` is configured.
  */
 export class CachedProfileStore extends ProfileStore {
   #store;

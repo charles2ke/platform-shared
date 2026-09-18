@@ -116,6 +116,7 @@ export function createKafkaConsumerWorker({
   groupId,
   logger = noopLogger,
   metrics,
+  producer,
   deadLetterPublisher,
   maxAttempts = 3,
   retry = { retries: 2, baseDelayMs: 200, maxDelayMs: 5_000 },
@@ -131,6 +132,9 @@ export function createKafkaConsumerWorker({
   }
   if (!Number.isInteger(maxAttempts) || maxAttempts < 1) {
     throw createError('STREAM_INVALID_MAX_ATTEMPTS', 'maxAttempts must be a positive integer', { status: 500 });
+  }
+  if (producer !== undefined && typeof producer.send !== 'function') {
+    throw createError('STREAM_INVALID_PRODUCER', 'producer must implement send()', { status: 500 });
   }
 
   const topicList = Array.isArray(topics) ? topics : [topics];
@@ -180,21 +184,43 @@ export function createKafkaConsumerWorker({
       processed?.inc({ topic, result: 'error' });
       logger.warn?.('Kafka message handling failed', { topic, partition, attempts, code: normalized.code });
 
-      if (attempts + 1 >= maxAttempts && deadLetterPublisher) {
-        deadLettered?.inc({ topic });
-        await deadLetterPublisher.publish(
-          createEventEnvelope('stream.dead-letter', {
-            topic,
-            partition,
-            offset: message?.offset,
-            attempts: attempts + 1,
-            reason: normalized.code
-          }),
-          { key: message?.key?.toString?.() }
-        );
+      const nextAttempts = attempts + 1;
+      if (nextAttempts >= maxAttempts) {
+        if (deadLetterPublisher) {
+          deadLettered?.inc({ topic });
+          await deadLetterPublisher.publish(
+            createEventEnvelope('stream.dead-letter', {
+              topic,
+              partition,
+              offset: message?.offset,
+              attempts: nextAttempts,
+              reason: normalized.code
+            }),
+            { key: message?.key?.toString?.() }
+          );
+          return;
+        }
+        // No dead-letter topic configured: rethrow so the broker redelivers.
+        throw normalized;
+      }
+
+      if (producer) {
+        // Kafka redelivery preserves the original headers verbatim, so the
+        // attempt count is persisted by republishing the message to the same
+        // topic with an incremented 'retry-attempts' header.
+        await producer.send({
+          topic,
+          messages: [{
+            key: message?.key,
+            value: message?.value,
+            headers: { ...message?.headers, 'retry-attempts': String(nextAttempts) }
+          }]
+        });
         return;
       }
-      // Rethrow so the broker redelivers and offsets are not advanced.
+
+      // No retry producer configured: fall back to broker redelivery, though
+      // the attempt count will not advance since headers are unchanged.
       throw normalized;
     } finally {
       inFlight -= 1;
