@@ -38,6 +38,7 @@ export const TRANSCODE_PRESETS = Object.freeze({
   'image-web': { kind: MEDIA_KINDS.IMAGE, format: 'jpeg', width: 1600, height: 1600, quality: 82 }
 });
 
+export const SAFE_JOB_ID = /^[A-Za-z0-9_-]{1,128}$/;
 const MAX_DIMENSION = 8192;
 const MAX_BITRATE_KBPS = 60_000;
 const SAFE_PATH = /^[\w./-]{1,512}$/;
@@ -78,6 +79,10 @@ export function normalizeTranscodeJob(input = {}) {
 
   const format = input.format ?? preset?.format;
   assertEnum(format, [...OUTPUT_FORMATS[kind]], 'MEDIA_INVALID_FORMAT', `Unsupported output format for ${kind}`);
+
+  if (input.id !== undefined && (typeof input.id !== 'string' || !SAFE_JOB_ID.test(input.id))) {
+    throw createError('MEDIA_INVALID_JOB_ID', 'id must be a filename-safe string of letters, digits, \'_\', or \'-\' (max 128 chars)', { status: 400 });
+  }
 
   for (const [field, value] of Object.entries({ source: input.source, destination: input.destination })) {
     if (typeof value !== 'string' || !SAFE_PATH.test(value) || value.includes('..')) {

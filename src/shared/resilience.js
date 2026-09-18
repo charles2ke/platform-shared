@@ -14,25 +14,43 @@ export const CIRCUIT_STATE = Object.freeze({
   HALF_OPEN: 'half-open'
 });
 
-/** Rejects with `OPERATION_TIMEOUT` when `operation` outlives `timeoutMs`. */
+/**
+ * Rejects with `OPERATION_TIMEOUT` when `operation` outlives `timeoutMs`.
+ *
+ * `operation` is invoked with an `AbortSignal` so it can propagate cancellation
+ * into the underlying driver call (Mongo/Kafka/HTTP). On timeout the signal is
+ * aborted and the wrapper still waits for `operation` to settle before
+ * returning, so a caller such as `withRetry` never starts a new attempt while
+ * the previous one is still running.
+ */
 export async function withTimeout(operation, { timeoutMs, name = 'operation', setTimeoutImpl = setTimeout, clearTimeoutImpl = clearTimeout } = {}) {
   if (typeof operation !== 'function') {
     throw new TypeError('operation must be a function');
   }
+  const controller = new AbortController();
   if (timeoutMs === undefined) {
-    return operation();
+    return operation(controller.signal);
   }
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
     throw createError('INVALID_TIMEOUT', 'timeoutMs must be a positive number', { status: 500 });
   }
 
   let timer;
+  let timedOut = false;
+  const operationPromise = Promise.resolve().then(() => operation(controller.signal));
+  // Swallow late rejections from the aborted attempt so they don't surface as
+  // unhandled rejections once we've already settled on the timeout error.
+  const settled = operationPromise.catch(() => {});
+
   try {
     return await Promise.race([
-      operation(),
+      operationPromise,
       new Promise((_resolve, reject) => {
         timer = setTimeoutImpl(() => {
-          reject(createError('OPERATION_TIMEOUT', `${name} timed out after ${timeoutMs}ms`, { status: 504, details: { name, timeoutMs } }));
+          timedOut = true;
+          const timeoutError = createError('OPERATION_TIMEOUT', `${name} timed out after ${timeoutMs}ms`, { status: 504, details: { name, timeoutMs } });
+          controller.abort(timeoutError);
+          reject(timeoutError);
         }, timeoutMs);
         timer?.unref?.();
       })
@@ -40,6 +58,9 @@ export async function withTimeout(operation, { timeoutMs, name = 'operation', se
   } finally {
     if (timer !== undefined) {
       clearTimeoutImpl(timer);
+    }
+    if (timedOut) {
+      await settled;
     }
   }
 }
@@ -113,6 +134,7 @@ export function createCircuitBreaker({
   let failures = 0;
   let successes = 0;
   let openedAt = 0;
+  let halfOpenProbeInFlight = false;
 
   function transition(next) {
     if (state === next) {
@@ -140,6 +162,12 @@ export function createCircuitBreaker({
           throw createError('CIRCUIT_OPEN', `${name} circuit is open`, { status: 503, details: { name } });
         }
         transition(CIRCUIT_STATE.HALF_OPEN);
+        halfOpenProbeInFlight = true;
+      } else if (state === CIRCUIT_STATE.HALF_OPEN) {
+        if (halfOpenProbeInFlight) {
+          throw createError('CIRCUIT_OPEN', `${name} circuit is half-open and already probing`, { status: 503, details: { name } });
+        }
+        halfOpenProbeInFlight = true;
       }
 
       try {
@@ -163,6 +191,10 @@ export function createCircuitBreaker({
           transition(CIRCUIT_STATE.OPEN);
         }
         throw normalizeError(error);
+      } finally {
+        if (state === CIRCUIT_STATE.HALF_OPEN) {
+          halfOpenProbeInFlight = false;
+        }
       }
     }
   };

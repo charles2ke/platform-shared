@@ -1,6 +1,6 @@
 import { createError, normalizeError } from '../shared/errors.js';
 import { noopLogger } from '../shared/logger.js';
-import { MEDIA_KINDS, TRANSCODE_STATUS, normalizeTranscodeJob } from './types.js';
+import { MEDIA_KINDS, SAFE_JOB_ID, TRANSCODE_STATUS, normalizeTranscodeJob } from './types.js';
 
 /**
  * Contract for transcoder backends (ffmpeg sidecar, GPU node pool, managed
@@ -94,6 +94,9 @@ export class FfmpegTranscoder extends Transcoder {
   }
 
   async transcode(job, { signal } = {}) {
+    if (typeof job.id !== 'string' || !SAFE_JOB_ID.test(job.id)) {
+      throw createError('MEDIA_INVALID_JOB_ID', 'job.id must be a filename-safe string before it is used in a filesystem path', { status: 400 });
+    }
     const inputPath = `${this.#workdir}/${job.id}.in`;
     const outputPath = `${this.#workdir}/${job.id}.${job.format === 'hls' ? 'm3u8' : job.format}`;
     const args = buildFfmpegArgs(job, { inputPath, outputPath });

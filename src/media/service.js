@@ -129,7 +129,10 @@ export class MediaTranscodingService {
       this.logger.warn?.('Transcoding job failed', { jobId: job.id, kind: job.kind, attempts: attempts + 1, code: normalized.code });
 
       if (attempts + 1 >= this.maxAttempts) {
-        await this.#deadLetter(job, attempts + 1, normalized);
+        const deadLettered = await this.#deadLetter(job, attempts + 1, normalized);
+        if (!deadLettered) {
+          throw normalized;
+        }
         return { id: job.id, status: TRANSCODE_STATUS.FAILED, attempts: attempts + 1, deadLettered: true, error: normalized.toJSON().error, job };
       }
       throw normalized;
@@ -141,7 +144,7 @@ export class MediaTranscodingService {
 
   async #deadLetter(job, attempts, error) {
     if (!this.deadLetterStore) {
-      return;
+      return false;
     }
     try {
       await this.deadLetterStore.add({
@@ -151,8 +154,10 @@ export class MediaTranscodingService {
         reason: error.code,
         failedAt: this.now().toISOString()
       });
+      return true;
     } catch (storeError) {
       this.logger.warn?.('Media dead-letter store failed', { jobId: job.id, code: normalizeError(storeError).code });
+      return false;
     }
   }
 
