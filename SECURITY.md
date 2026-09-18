@@ -34,8 +34,9 @@ security, persistence, and secret storage. The library provides:
   unawaited promise.
 - Action-keyed access policies (`createAccessPolicy()`) so RBAC is enforced in
   services, jobs, and queue consumers, not just HTTP routes.
-- Structured `PlatformError`s that avoid leaking internals through HTTP responses
-  (`toHttpErrorResponse()`).
+- Structured `PlatformError`s that give consumers a consistent HTTP error envelope
+  (`toHttpErrorResponse()`); it does not sanitize `error.message` or `PlatformError.details`, so
+  callers are responsible for not putting sensitive data into either.
 
 ## Operational requirements for consumers
 
@@ -50,7 +51,9 @@ security, persistence, and secret storage. The library provides:
 
 ## Automated controls in this repository
 
-- CI runs the full test suite and syntax checks on every push and pull request.
-- CodeQL (`security-extended`) scans on push, pull request, and weekly.
+- CI runs the full test suite and syntax checks on every push to `main` and every pull
+  request targeting `main`.
+- CodeQL (`security-extended`) scans on push to `main`, pull requests targeting `main`,
+  and weekly.
 - Dependabot watches npm and GitHub Actions versions weekly.
 - Workflows run with least-privilege `permissions` and without persisted credentials.

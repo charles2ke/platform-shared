@@ -373,8 +373,9 @@ Workflows declare least-privilege `permissions` and check out without persisting
 - Revocation stores are synchronous, so a guard cannot be bypassed by an unawaited promise.
 - Access policies are action-keyed, so the same requirements apply to HTTP routes, jobs, and queue
   consumers.
-- Errors are structured `PlatformError`s, and `toHttpErrorResponse()` keeps internals out of API
-  responses.
+- Errors are structured `PlatformError`s, and `toHttpErrorResponse()` maps them to a consistent
+  `{ status, body }` envelope; it does not sanitize `error.message` or `PlatformError.details`, so
+  callers must avoid putting sensitive data in either.
 
 ### Operator checklist
 
