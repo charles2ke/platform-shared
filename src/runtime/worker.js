@@ -59,7 +59,6 @@ export function createBackgroundWorker({
         Promise.resolve().then(() => handler(context)),
         new Promise((_resolve, reject) => {
           timeoutTimer = setTimeout(() => reject(new Error(`${name} run timed out after ${timeoutMs}ms`)), timeoutMs);
-          timeoutTimer?.unref?.();
         })
       ]);
     } finally {
