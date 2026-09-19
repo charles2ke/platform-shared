@@ -71,6 +71,10 @@ examples/          Integration stubs for social, travel, workout, and basa
 - `HttpChannelAdapter` is a concrete channel adapter that POSTs rendered notifications to a provider endpoint, with `headers`, `transform`, and `timeoutMs` options.
 - `createNotificationWorker(service, { intervalMs })` drains scheduled notifications from a cron trigger (`runOnce()`) or a long-running worker (`start()` / `stop()`), and `replayDeadLetters({ service, store })` re-queues dead-lettered notifications after an outage.
 
+### Runtime
+
+- `createBackgroundWorker({ handler, intervalMs })` is a generic background job runner: schedule it with `start()` / `stop()` or trigger it on demand with `runOnce()` from an HTTP route, CLI command, or external cron. Overlapping runs are skipped, `timeoutMs` bounds a run, failures are normalized to `PlatformError` (and forwarded to `onError` instead of thrown when supplied), and `getStats()` exposes run counters for metrics and health endpoints.
+
 ### Shared
 
 - `loadConfig()` reads environment configuration.
@@ -279,6 +283,33 @@ const { processed, retried, deadLettered, pending } = await notifications.dispat
 // Cancel queued deliveries when the underlying event changes.
 await notifications.listScheduled();
 await notifications.cancelScheduled(reminder.id);
+```
+
+### Run a background job on a schedule or on demand
+
+```js
+import { createBackgroundWorker } from '@charles2ke/platform-shared/runtime';
+
+const worker = createBackgroundWorker({
+  name: 'profile-reindex',
+  handler: async ({ trigger }) => reindexProfiles({ trigger }),
+  intervalMs: 5 * 60_000,
+  timeoutMs: 60_000,
+  runOnStart: true,
+  logger,
+  onError: (error) => metrics.increment('profile_reindex_failed', { code: error.code })
+});
+
+worker.start(); // long-running process
+
+// On demand: admin endpoint, CLI command, or external cron trigger.
+const run = await worker.runOnce({ trigger: 'admin', requestedBy: principal.id });
+if (run.status === 'skipped') {
+  // a run was already in flight
+}
+
+worker.getStats(); // { runs, failures, skipped, lastDurationMs, ... }
+worker.stop();
 ```
 
 ## Downstream integration approach
