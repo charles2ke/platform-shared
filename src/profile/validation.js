@@ -44,7 +44,8 @@ export function normalizeProfile(input = {}, defaults = {}) {
     locale: normalizeString(input.locale) ?? defaults.locale ?? 'en-US',
     avatarUrl: normalizeString(input.avatarUrl),
     status: normalizeString(input.status) ?? 'active',
-    metadata: { ...(input.metadata ?? {}) }
+    metadata: { ...(input.metadata ?? {}) },
+    ...(normalizeString(input.deletedAt) ? { deletedAt: normalizeString(input.deletedAt) } : {})
   };
 }
 

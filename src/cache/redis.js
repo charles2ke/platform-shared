@@ -2,6 +2,7 @@ import { createError, normalizeError } from '../shared/errors.js';
 import { noopLogger } from '../shared/logger.js';
 import { createResiliencePolicy } from '../shared/resilience.js';
 import { ProfileStore } from '../profile/memory-store.js';
+import { searchProfiles } from '../profile/search.js';
 
 /**
  * Redis caching. The client is injected (an ioredis/node-redis instance, or any
@@ -81,7 +82,8 @@ export function createRedisCache({
   localCache = createLruCache(),
   timeoutMs = 250,
   chaos,
-  subscriber
+  subscriber,
+  ttlByPrefix = {}
 } = {}) {
   if (!client || typeof client.get !== 'function' || typeof client.set !== 'function') {
     throw createError('CACHE_INVALID_CLIENT', 'A Redis client with get() and set() is required', { status: 500 });
@@ -89,6 +91,19 @@ export function createRedisCache({
   if (!Number.isInteger(ttlSeconds) || ttlSeconds < 1) {
     throw createError('CACHE_INVALID_TTL', 'ttlSeconds must be a positive integer', { status: 500 });
   }
+  if (ttlByPrefix === null || typeof ttlByPrefix !== 'object' || Array.isArray(ttlByPrefix)) {
+    throw createError('CACHE_INVALID_TTL', 'ttlByPrefix must be an object mapping key prefixes to TTL seconds', { status: 500 });
+  }
+  // Longest prefix first so the most specific rule wins.
+  const prefixTtls = Object.entries(ttlByPrefix)
+    .map(([prefix, ttl]) => {
+      if (prefix.length === 0 || !Number.isInteger(ttl) || ttl < 1) {
+        throw createError('CACHE_INVALID_TTL', `ttlByPrefix["${prefix}"] must be a positive integer for a non-empty prefix`, { status: 500 });
+      }
+      return [prefix, ttl];
+    })
+    .sort(([left], [right]) => right.length - left.length);
+  const ttlFor = (key) => prefixTtls.find(([prefix]) => key.startsWith(prefix))?.[1] ?? ttlSeconds;
 
   const policy = createResiliencePolicy({
     name: 'redis',
@@ -193,7 +208,7 @@ export function createRedisCache({
     }
   }
 
-  async function set(key, value, { ttl = ttlSeconds } = {}) {
+  async function set(key, value, { ttl = ttlFor(key) } = {}) {
     localCache?.set(key, value);
     await guarded(() => client.set(keyFor(key), JSON.stringify(value), 'EX', ttl), undefined);
     return value;
@@ -210,7 +225,7 @@ export function createRedisCache({
       // Redis invalidation failed but the request path still fails open:
       // record a tombstone so this pod won't serve the stale remote value
       // until it naturally expires (or a later delete succeeds).
-      tombstones.set(key, Date.now() + ttlSeconds * 1000);
+      tombstones.set(key, Date.now() + ttlFor(key) * 1000);
     } else {
       tombstones.delete(key);
       await publishInvalidation(key);
@@ -220,6 +235,8 @@ export function createRedisCache({
 
   return {
     namespace,
+    /** TTL in seconds applied to `key` when `set()` is called without `ttl`. */
+    ttlFor,
     get,
     set,
     delete: del,
@@ -300,5 +317,13 @@ export class CachedProfileStore extends ProfileStore {
 
   async list(options) {
     return this.#store.list(options);
+  }
+
+  /** Searches are not cached; they pass through to the underlying store. */
+  async search(criteria) {
+    if (typeof this.#store.search === 'function') {
+      return this.#store.search(criteria);
+    }
+    return searchProfiles(await this.#store.list(), criteria);
   }
 }

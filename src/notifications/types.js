@@ -10,3 +10,12 @@ export const DELIVERY_STATUS = Object.freeze({
   FAILED: 'failed',
   PARTIAL: 'partial'
 });
+
+/**
+ * `all` delivers on every channel; `fallback` tries channels in order and
+ * stops at the first one that does not fail.
+ */
+export const DELIVERY_STRATEGY = Object.freeze({
+  ALL: 'all',
+  FALLBACK: 'fallback'
+});

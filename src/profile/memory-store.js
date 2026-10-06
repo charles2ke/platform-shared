@@ -1,4 +1,5 @@
 import { createError } from '../shared/errors.js';
+import { searchProfiles } from './search.js';
 
 function clone(value) {
   return value ? structuredClone(value) : value;
@@ -64,5 +65,10 @@ export class InMemoryProfileStore extends ProfileStore {
 
   async list() {
     return [...this.#profiles.values()].map(clone);
+  }
+
+  async search(criteria) {
+    const { items, nextCursor } = searchProfiles([...this.#profiles.values()], criteria);
+    return { items: items.map(clone), nextCursor };
   }
 }

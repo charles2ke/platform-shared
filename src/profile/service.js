@@ -2,13 +2,17 @@ import { randomUUID } from 'node:crypto';
 import { toAccessPolicy } from '../auth/policy.js';
 import { createError } from '../shared/errors.js';
 import { InMemoryProfileStore } from './memory-store.js';
+import { searchProfiles } from './search.js';
 import { assertValidProfile, normalizeProfile } from './validation.js';
 
 /**
  * Profile CRUD over a replaceable store. Supplying `policy` enforces RBAC on
  * every call (`profile.create`, `profile.get`, `profile.update`,
- * `profile.delete`, `profile.list`) so authorization is not limited to HTTP
- * routes. Callers then pass `{ principal }` to each method.
+ * `profile.delete`, `profile.list`, plus `profile.restore` and
+ * `profile.search`) so authorization is not limited to HTTP routes. Callers
+ * then pass `{ principal }` to each method. When `profile.restore` or
+ * `profile.search` has no requirement of its own, `profile.delete` and
+ * `profile.list` are enforced instead so new methods never bypass RBAC.
  */
 export class ProfileService {
   constructor({ store = new InMemoryProfileStore(), defaults = {}, policy, roleRegistry } = {}) {
@@ -20,6 +24,18 @@ export class ProfileService {
   #enforce(action, { principal } = {}) {
     if (this.policy) {
       this.policy.enforce(action, principal);
+    }
+  }
+
+  #enforceWithFallback(action, fallbackAction, options) {
+    if (!this.policy) {
+      return;
+    }
+    const hasOwnRequirement = typeof this.policy.requirementsFor === 'function'
+      && this.policy.requirementsFor(action) !== undefined;
+    this.#enforce(hasOwnRequirement ? action : fallbackAction, options);
+    if (!hasOwnRequirement && typeof this.policy.requirementsFor !== 'function') {
+      this.#enforce(action, options);
     }
   }
 
@@ -71,5 +87,51 @@ export class ProfileService {
   async list(options = {}) {
     this.#enforce('profile.list', options);
     return this.store.list();
+  }
+
+  /**
+   * Soft delete: keeps the record but marks it `deleted` with a `deletedAt`
+   * timestamp so it can be restored. Use `delete()` for permanent removal.
+   */
+  async softDelete(id, options = {}) {
+    this.#enforce('profile.delete', options);
+    const existing = await this.#requireProfile(id);
+    if (existing.status === 'deleted') {
+      return existing;
+    }
+    const profile = normalizeProfile({ ...existing, status: 'deleted', deletedAt: new Date().toISOString(), id }, this.defaults);
+    assertValidProfile(profile);
+    return this.store.update(id, profile);
+  }
+
+  /** Restores a soft-deleted profile to `options.status` (default `active`). */
+  async restore(id, options = {}) {
+    this.#enforceWithFallback('profile.restore', 'profile.delete', options);
+    const existing = await this.#requireProfile(id);
+    if (existing.status !== 'deleted') {
+      throw createError('PROFILE_NOT_DELETED', 'Only soft-deleted profiles can be restored', { status: 409, details: { id } });
+    }
+    const { deletedAt, ...rest } = existing;
+    const profile = normalizeProfile({ ...rest, status: options.status ?? 'active', id }, this.defaults);
+    if (profile.status === 'deleted') {
+      throw createError('PROFILE_VALIDATION_FAILED', 'Profile validation failed', { status: 400, details: [{ field: 'status', message: 'Restored status cannot be deleted' }] });
+    }
+    assertValidProfile(profile);
+    return this.store.update(id, profile);
+  }
+
+  /**
+   * Searches profiles by `query` (display name or email), `status`, and
+   * `includeDeleted`, paginated with `limit` and an opaque `cursor`.
+   * Delegates to `store.search()` when available, otherwise filters
+   * `store.list()` in memory.
+   * @returns {Promise<{items: object[], nextCursor?: string}>}
+   */
+  async search({ principal, ...criteria } = {}) {
+    this.#enforceWithFallback('profile.search', 'profile.list', { principal });
+    if (typeof this.store.search === 'function') {
+      return this.store.search(criteria);
+    }
+    return searchProfiles(await this.store.list(), criteria);
   }
 }
