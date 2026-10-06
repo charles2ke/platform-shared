@@ -50,6 +50,17 @@ test('login throttle bounds memory and validates input', () => {
   assert.throws(() => createLoginThrottle({ maxAttempts: 0 }), { code: 'AUTH_INVALID_THROTTLE_CONFIG' });
 });
 
+test('login throttle does not lift active lockouts when flooded with new keys', () => {
+  const throttle = createLoginThrottle({ maxAttempts: 2, maxEntries: 3 });
+  throttle.recordFailure('victim');
+  throttle.recordFailure('victim');
+  for (const key of ['a', 'b', 'c', 'd', 'e']) {
+    throttle.recordFailure(key);
+  }
+  assert.equal(throttle.check('victim').allowed, false);
+  assert.equal(throttle.size(), 3);
+});
+
 // --- Mongo test double ------------------------------------------------------
 
 function matches(document, filter) {
@@ -221,6 +232,29 @@ test('restore and search fall back to delete and list policies when not configur
   await assert.rejects(() => guarded.search({ principal: viewer }), { code: 'AUTH_FORBIDDEN' });
   assert.equal((await guarded.search({ principal: admin, includeDeleted: true })).items.length, 1);
   assert.equal((await guarded.restore('p-9', { principal: admin })).status, 'active');
+});
+
+test('update() status changes into or out of deleted follow soft delete and restore rules', async () => {
+  const service = new ProfileService({
+    policy: {
+      'profile.update': { permissions: ['profile:write'] },
+      'profile.delete': { roles: ['admin'] }
+    },
+    roleRegistry: createRoleRegistry({ admin: ['profile:write'], editor: ['profile:write'] })
+  });
+  const admin = { id: 'admin', roles: ['admin'] };
+  const editor = { id: 'editor', roles: ['editor'] };
+  await service.create({ id: 'p-u', displayName: 'Updatable' });
+
+  await assert.rejects(() => service.update('p-u', { status: 'deleted' }, { principal: editor }), { code: 'AUTH_FORBIDDEN' });
+  const deleted = await service.update('p-u', { status: 'deleted' }, { principal: admin });
+  assert.equal(typeof deleted.deletedAt, 'string');
+
+  await assert.rejects(() => service.update('p-u', { status: 'active' }, { principal: editor }), { code: 'AUTH_FORBIDDEN' });
+  assert.equal((await service.update('p-u', { displayName: 'Still Deleted' }, { principal: editor })).deletedAt, deleted.deletedAt);
+  const restored = await service.update('p-u', { status: 'active', deletedAt: 'ignored' }, { principal: admin });
+  assert.equal(restored.status, 'active');
+  assert.equal('deletedAt' in restored, false);
 });
 
 test('MongoProfileStore search escapes regex input and paginates; restore unsets deletedAt', async () => {

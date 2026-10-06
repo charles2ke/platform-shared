@@ -7,8 +7,9 @@ import { createError } from '../shared/errors.js';
  * an account and a source address.
  *
  * The throttle is synchronous and in-process, matching the revocation store
- * contract. Memory is bounded by `maxEntries`: when full, the oldest tracked
- * key is evicted. Scaled-out deployments that need a shared view should wrap a
+ * contract. Memory is bounded by `maxEntries`: when full, an expired or the
+ * oldest unlocked key is evicted before any locked key, so flooding the
+ * throttle with throwaway keys does not lift existing lockouts. Scaled-out deployments that need a shared view should wrap a
  * shared store with the same `check()`/`recordFailure()`/`recordSuccess()`
  * methods.
  */
@@ -88,10 +89,7 @@ export function createLoginThrottle({
       }
       if (!entry) {
         if (entries.size >= maxEntries) {
-          prune();
-          if (entries.size >= maxEntries) {
-            entries.delete(entries.keys().next().value);
-          }
+          evictOne();
         }
         entry = { failures: 0, windowStart: time, lockedUntil: undefined };
         entries.set(normalized, entry);
@@ -116,6 +114,30 @@ export function createLoginThrottle({
 
     size: () => entries.size
   };
+
+  /**
+   * Frees one slot without undoing an active lockout when avoidable: an
+   * expired entry first, then the oldest unlocked entry, and only when every
+   * entry is locked, the lock that expires soonest.
+   */
+  function evictOne() {
+    let soonestLocked;
+    for (const [key, entry] of entries) {
+      if (!current(key)) {
+        return;
+      }
+      if (entry.lockedUntil === undefined) {
+        entries.delete(key);
+        return;
+      }
+      if (!soonestLocked || entry.lockedUntil < soonestLocked[1]) {
+        soonestLocked = [key, entry.lockedUntil];
+      }
+    }
+    if (soonestLocked) {
+      entries.delete(soonestLocked[0]);
+    }
+  }
 
   function prune() {
     let removed = 0;

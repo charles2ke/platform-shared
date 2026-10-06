@@ -88,14 +88,26 @@ export class ProfileService {
   async update(id, updates = {}, options = {}) {
     this.#enforce('profile.update', options);
     const existing = await this.#requireProfile(id);
+    const { deletedAt: _ignoredDeletedAt, ...changes } = updates ?? {};
     const merged = {
       ...existing,
-      ...updates,
-      contact: { ...existing.contact, ...updates.contact },
-      preferences: { ...existing.preferences, ...updates.preferences },
-      metadata: { ...existing.metadata, ...updates.metadata },
+      ...changes,
+      contact: { ...existing.contact, ...changes.contact },
+      preferences: { ...existing.preferences, ...changes.preferences },
+      metadata: { ...existing.metadata, ...changes.metadata },
       id
     };
+    // Status moves into or out of `deleted` carry the same RBAC and
+    // `deletedAt` bookkeeping as softDelete()/restore().
+    const wasDeleted = existing.status === 'deleted';
+    const isDeleted = normalizeProfile(merged, this.defaults).status === 'deleted';
+    if (!wasDeleted && isDeleted) {
+      this.#enforce('profile.delete', options);
+      merged.deletedAt = new Date().toISOString();
+    } else if (wasDeleted && !isDeleted) {
+      this.#enforceWithFallback('profile.restore', 'profile.delete', options);
+      delete merged.deletedAt;
+    }
     const profile = normalizeProfile(merged, this.defaults);
     assertValidProfile(profile);
     return this.store.update(id, profile);
