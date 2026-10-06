@@ -43,6 +43,9 @@ jobs:
       - name: Test
         run: npm test
 
+      - name: Type declarations
+        run: npm run check:types
+
   audit:
     name: Dependency audit
     runs-on: ubuntu-latest

@@ -29,33 +29,71 @@
   "type": "module",
   "sideEffects": false,
   "main": "./src/index.js",
+  "types": "./types/index.d.ts",
   "exports": {
-    ".": "./src/index.js",
-    "./adapters": "./src/adapters/index.js",
-    "./auth": "./src/auth/index.js",
-    "./cache": "./src/cache/index.js",
-    "./media": "./src/media/index.js",
-    "./notifications": "./src/notifications/index.js",
+    ".": {
+      "types": "./types/index.d.ts",
+      "default": "./src/index.js"
+    },
+    "./adapters": {
+      "types": "./types/adapters/index.d.ts",
+      "default": "./src/adapters/index.js"
+    },
+    "./auth": {
+      "types": "./types/auth/index.d.ts",
+      "default": "./src/auth/index.js"
+    },
+    "./cache": {
+      "types": "./types/cache/index.d.ts",
+      "default": "./src/cache/index.js"
+    },
+    "./media": {
+      "types": "./types/media/index.d.ts",
+      "default": "./src/media/index.js"
+    },
+    "./notifications": {
+      "types": "./types/notifications/index.d.ts",
+      "default": "./src/notifications/index.js"
+    },
     "./package.json": "./package.json",
-    "./profile": "./src/profile/index.js",
-    "./runtime": "./src/runtime/index.js",
-    "./shared": "./src/shared/index.js",
-    "./storage": "./src/storage/index.js",
-    "./streaming": "./src/streaming/index.js"
+    "./profile": {
+      "types": "./types/profile/index.d.ts",
+      "default": "./src/profile/index.js"
+    },
+    "./runtime": {
+      "types": "./types/runtime/index.d.ts",
+      "default": "./src/runtime/index.js"
+    },
+    "./shared": {
+      "types": "./types/shared/index.d.ts",
+      "default": "./src/shared/index.js"
+    },
+    "./storage": {
+      "types": "./types/storage/index.d.ts",
+      "default": "./src/storage/index.js"
+    },
+    "./streaming": {
+      "types": "./types/streaming/index.d.ts",
+      "default": "./src/streaming/index.js"
+    }
   },
   "files": [
     "LICENSE",
     "README.md",
     "SECURITY.md",
     "deploy",
-    "src"
+    "src",
+    "types"
   ],
   "scripts": {
     "build": "node scripts/check-syntax.js",
     "test": "node --test",
     "test:coverage": "node --test --experimental-test-coverage",
-    "check": "npm run build && npm test",
-    "audit": "npm audit --omit=dev --audit-level=high"
+    "check": "npm run build && npm test && npm run check:types",
+    "audit": "npm audit --omit=dev --audit-level=high",
+    "types": "tsc -p tsconfig.types.json",
+    "check:types": "npm run types && tsc -p tsconfig.check.json",
+    "prepare": "npm run types"
   },
   "engines": {
     "node": ">=22"
@@ -63,5 +101,8 @@
   "publishConfig": {
     "access": "public",
     "provenance": true
+  },
+  "devDependencies": {
+    "typescript": "7.0.2"
   }
 }

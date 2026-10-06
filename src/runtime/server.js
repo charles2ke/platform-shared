@@ -2,12 +2,18 @@ import { createServer } from 'node:http';
 import { noopLogger } from '../shared/logger.js';
 
 /**
+ * @typedef {{ready: () => Promise<{status: string, [key: string]: any}>, live: () => object, isStarted: () => boolean}} OpsHealth
+ * @typedef {{render: () => string}} OpsMetrics
+ */
+
+/**
  * Small operations server for a Kubernetes pod: liveness, readiness, and
  * startup probes plus the Prometheus `/metrics` endpoint the HPA scrapes.
  *
  * It listens on its own port (default 9090) so probes and metrics are never
  * exposed on the public application port, request bodies are ignored, and every
  * socket is tracked so `close()` cannot leave dangling handles behind.
+ * @param {{health?: OpsHealth, metrics?: OpsMetrics, collect?: () => void, logger?: {debug?: Function, info?: Function, warn?: Function, error?: Function}, port?: number, host?: string, headersTimeoutMs?: number, requestTimeoutMs?: number}} [options]
  */
 export function createOpsServer({
   health,

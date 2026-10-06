@@ -67,6 +67,9 @@ function matches(document, filter) {
   });
 }
 
+/**
+ * @param {{uniqueFields?: string[]}} [options]
+ */
 function fakeCollection({ uniqueFields = [] } = {}) {
   const documents = [];
   const project = (document) => (document ? structuredClone(document) : null);
@@ -76,6 +79,7 @@ function fakeCollection({ uniqueFields = [] } = {}) {
     async findOne(filter) {
       return project(documents.find((document) => matches(document, filter)));
     },
+    /** @param {any} filter @param {any} replacement @param {{upsert?: boolean}} [options] */
     async replaceOne(filter, replacement, { upsert } = {}) {
       const index = documents.findIndex((document) => matches(document, filter));
       for (const field of uniqueFields) {

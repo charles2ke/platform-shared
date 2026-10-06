@@ -53,7 +53,7 @@ export class InMemoryTokenRevocationStore extends TokenRevocationStore {
   /**
    * Revokes every token issued for a subject at or before `issuedBefore`.
    * @param {string} subject Token subject (`sub` claim).
-   * @param {{ issuedBefore?: Date|number }} [options]
+   * @param {{ issuedBefore?: Date|string|number }} [options]
    */
   revokeSubject(subject, { issuedBefore = new Date() } = {}) {
     if (typeof subject !== 'string' || subject.length === 0) {
@@ -107,6 +107,7 @@ export class InMemoryTokenRevocationStore extends TokenRevocationStore {
 
   /**
    * Drops revocation entries for tokens that already expired.
+   * @param {Date|string|number} [now]
    * @returns {number} How many entries were removed.
    */
   prune(now = new Date()) {

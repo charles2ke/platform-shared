@@ -9,9 +9,22 @@ import { CHANNELS, DELIVERY_STATUS, DELIVERY_STRATEGY } from './types.js';
 const SUPPORTED_CHANNELS = new Set(Object.values(CHANNELS));
 const SUPPORTED_STRATEGIES = new Set(Object.values(DELIVERY_STRATEGY));
 
+/**
+ * @typedef {Date|string|number} DateInput
+ * @typedef {import('./mock-adapter.js').NotificationMessage} ServiceNotificationMessage
+ * @typedef {import('./mock-adapter.js').ChannelDelivery} ServiceChannelDelivery
+ * @typedef {{notification: ServiceNotificationMessage, scheduledFor: string, attempts?: number, scheduledAt?: number}} ScheduledNotification
+ * @typedef {{notificationId?: string, status: string, strategy?: string, deliveries?: ServiceChannelDelivery[], scheduledFor?: string, notification?: ServiceNotificationMessage, deferred?: boolean}} DeliveryResult
+ * @typedef {{enqueue?: (notification: ServiceNotificationMessage, scheduledFor: Date, attempts?: number) => Promise<any>, dequeueDue?: (now: Date) => Promise<any>, requeue?: (notification: ServiceNotificationMessage, scheduledFor: Date, attempts: number) => Promise<any>, cancel?: (notificationId: string) => Promise<any>, countPending?: (now?: Date) => Promise<any>, list?: () => Promise<any>}} NotificationSchedulerLike
+ * @typedef {{add: (record: object) => Promise<any>}} DeadLetterStoreLike
+ */
+
 export class NotificationService {
   #scheduled = [];
 
+  /**
+   * @param {{adapters?: Record<string, {send: (message: ServiceNotificationMessage) => Promise<ServiceChannelDelivery>}>, logger?: {debug?: Function, info?: Function, warn?: Function, error?: Function}, scheduler?: NotificationSchedulerLike, maxScheduleAttempts?: number, retryDelayMs?: number, retryBackoffFactor?: number, maxRetryDelayMs?: number, onDeadLetter?: any, deadLetterStore?: DeadLetterStoreLike|any, retryPartialFailures?: boolean, policy?: import('../auth/policy.js').AccessPolicy|Record<string, import('../auth/rbac.js').AccessRequirements>, roleRegistry?: object}} [options]
+   */
   constructor({ adapters = {}, logger = noopLogger, scheduler, maxScheduleAttempts = 3, retryDelayMs = 60_000, retryBackoffFactor = 1, maxRetryDelayMs, onDeadLetter, deadLetterStore, retryPartialFailures = true, policy, roleRegistry } = {}) {
     this.adapters = adapters;
     this.logger = logger;
@@ -51,6 +64,7 @@ export class NotificationService {
   }
 
   /** Delay in milliseconds before the retry that follows `attempts` failures. */
+  /** @param {number} attempts @returns {number} */
   retryDelayFor(attempts) {
     const normalizedAttempts = Number.isFinite(attempts) ? Math.max(1, Math.floor(attempts)) : 1;
     const exponent = normalizedAttempts - 1;
@@ -65,6 +79,11 @@ export class NotificationService {
    * `deferred: true` is returned. Set `notification.bypassQuietHours` for
    * urgent messages.
    */
+  /**
+   * @param {ServiceNotificationMessage} notification
+   * @param {{now?: DateInput, principal?: import('../auth/rbac.js').Principal}} [options]
+   * @returns {Promise<DeliveryResult>}
+   */
   async send(notification, options = {}) {
     this.#enforce('notification.send', options);
     const deferUntil = quietHoursDeferral(notification, options.now ?? new Date());
@@ -76,6 +95,10 @@ export class NotificationService {
   }
 
   /** Delivery without a policy check, used by already-authorized dispatch runs. */
+  /**
+   * @param {ServiceNotificationMessage} notification
+   * @returns {Promise<DeliveryResult>}
+   */
   async #deliver(notification) {
     const channels = normalizeChannels(notification);
     if (channels.length === 0) {
@@ -132,6 +155,12 @@ export class NotificationService {
    * Queues a notification for `when`. If `notification.quietHours` is set and
    * `when` falls inside it, delivery is shifted to the end of quiet hours.
    */
+  /**
+   * @param {ServiceNotificationMessage} notification
+   * @param {DateInput} when
+   * @param {{principal?: import('../auth/rbac.js').Principal}} [options]
+   * @returns {Promise<DeliveryResult>}
+   */
   async schedule(notification, when, options = {}) {
     this.#enforce('notification.schedule', options);
     const requested = normalizeScheduleDate(when);
@@ -157,6 +186,10 @@ export class NotificationService {
   }
 
   /** Lists pending scheduled entries from the in-memory queue or injected scheduler. */
+  /**
+   * @param {{principal?: import('../auth/rbac.js').Principal}} [options]
+   * @returns {Promise<ScheduledNotification[]>}
+   */
   async listScheduled(options = {}) {
     this.#enforce('notification.list', options);
     if (!this.scheduler) {
@@ -178,6 +211,7 @@ export class NotificationService {
   /**
    * Cancels every pending scheduled entry for a notification id, for example
    * when a trip is cancelled or a workout is completed early.
+   * @param {{principal?: import('../auth/rbac.js').Principal}} [options]
    * @returns {Promise<{notificationId: string, cancelled: number}>}
    */
   async cancelScheduled(notificationId, options = {}) {
@@ -207,6 +241,9 @@ export class NotificationService {
     throw createError('NOTIFICATION_INVALID_SCHEDULER_RESPONSE', 'scheduler.cancel() must return a boolean or a non-negative integer', { status: 500 });
   }
 
+  /**
+   * @param {{now?: DateInput, principal?: import('../auth/rbac.js').Principal}} [options]
+   */
   async dispatchScheduled({ now = new Date(), principal } = {}) {
     this.#enforce('notification.dispatch', { principal });
     const nowDate = normalizeScheduleDate(now, { code: 'NOTIFICATION_INVALID_DISPATCH_TIME', message: 'Dispatch time must be a valid date value' });

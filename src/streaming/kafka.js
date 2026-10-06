@@ -18,7 +18,20 @@ import { createResiliencePolicy } from '../shared/resilience.js';
 
 const MAX_MESSAGE_BYTES = 1024 * 1024;
 
+/**
+ * @typedef {{id?: string, type?: string, source?: string, key?: any, correlationId?: string, occurredAt?: string, payload?: any}} PlatformEvent
+ * @typedef {{send: (request: {topic: string, messages: any[]}) => Promise<any>|any}} KafkaProducerLike
+ * @typedef {{subscribe: Function, run: Function, stop?: Function, disconnect?: Function}} KafkaConsumerLike
+ * @typedef {{counter?: Function, gauge?: Function, histogram?: Function}} KafkaMetricsLike
+ */
+
 /** Envelope every platform event is published in. */
+/**
+ * @param {string} type
+ * @param {any} payload
+ * @param {{key?: any, correlationId?: string, source?: string, now?: () => Date}} [options]
+ * @returns {PlatformEvent}
+ */
 export function createEventEnvelope(type, payload, { key, correlationId, source = 'platform-shared', now = () => new Date() } = {}) {
   if (typeof type !== 'string' || type.length === 0) {
     throw createError('STREAM_INVALID_EVENT_TYPE', 'Event type must be a non-empty string', { status: 400 });
@@ -38,6 +51,7 @@ export function createEventEnvelope(type, payload, { key, correlationId, source 
 /**
  * Publishes domain events to Kafka with retries, a circuit breaker, and a
  * bulkhead so a broker outage degrades the caller instead of exhausting memory.
+ * @param {{producer?: KafkaProducerLike, topic?: string, logger?: {debug?: Function, info?: Function, warn?: Function, error?: Function}, metrics?: KafkaMetricsLike|any, timeoutMs?: number, retry?: import('../shared/resilience.js').RetryOptions, breaker?: import('../shared/resilience.js').CircuitBreakerOptions|null, bulkhead?: import('../shared/resilience.js').BulkheadOptions|null, chaos?: any, maxMessageBytes?: number}} [options]
  */
 export function createKafkaEventPublisher({
   producer,
@@ -108,6 +122,7 @@ export function createKafkaEventPublisher({
  * dead-letter topic, offset commits after successful handling, and graceful
  * stop on SIGTERM. Processing stays sequential per partition so memory use is
  * flat regardless of backlog size; scale out with more pods/partitions.
+ * @param {{consumer?: KafkaConsumerLike, topics?: string|string[], handler?: (event: any, context: object) => any|Promise<any>, groupId?: string, logger?: {debug?: Function, info?: Function, warn?: Function, error?: Function}, metrics?: KafkaMetricsLike|any, producer?: KafkaProducerLike, deadLetterPublisher?: {publish: Function}, maxAttempts?: number, retry?: import('../shared/resilience.js').RetryOptions, timeoutMs?: number, chaos?: any, fromBeginning?: boolean}} [options]
  */
 export function createKafkaConsumerWorker({
   consumer,
@@ -270,6 +285,7 @@ export function createKafkaConsumerWorker({
 /**
  * In-memory Kafka double for tests, local development, and chaos experiments.
  * Retains at most `maxMessages` per topic so long test runs cannot grow the heap.
+ * @param {{maxMessages?: number}} [options]
  */
 export function createInMemoryKafka({ maxMessages = 1000 } = {}) {
   const topics = new Map();

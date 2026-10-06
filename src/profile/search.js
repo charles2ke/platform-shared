@@ -5,6 +5,7 @@ export const MAX_PROFILE_SEARCH_LIMIT = 1_000;
 
 /**
  * Validates and normalizes profile search criteria shared by every store.
+ * @param {{query?: any, status?: any, includeDeleted?: boolean, limit?: number, cursor?: any}} [criteria]
  * @returns {{query?: string, status?: string, includeDeleted: boolean, limit: number, cursor?: string}}
  */
 export function normalizeProfileSearch({ query, status, includeDeleted = false, limit = DEFAULT_PROFILE_SEARCH_LIMIT, cursor } = {}) {
@@ -34,6 +35,8 @@ export function normalizeProfileSearch({ query, status, includeDeleted = false, 
  * In-memory search with keyset pagination ordered by profile `id`: matches
  * `query` case-insensitively against `displayName` and `contact.email`, and
  * hides `deleted` profiles unless `includeDeleted` or an explicit `status` is set.
+ * @param {Array<{id: string, displayName?: string, contact?: {email?: string}, status?: string, [key: string]: any}>} profiles
+ * @param {{query?: any, status?: any, includeDeleted?: boolean, limit?: number, cursor?: any}} [criteria]
  * @returns {{items: object[], nextCursor?: string}}
  */
 export function searchProfiles(profiles, criteria = {}) {

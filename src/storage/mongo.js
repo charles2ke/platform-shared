@@ -8,6 +8,11 @@ import { DeadLetterStore } from '../notifications/dead-letter.js';
 import { encryptJSON, decryptJSON } from '../shared/crypto.js';
 
 /**
+ * @typedef {import('../profile/memory-store.js').Profile} Profile
+ * @typedef {{findOne?: Function, insertOne?: Function, updateOne?: Function, deleteOne?: Function, deleteMany?: Function, replaceOne?: Function, find?: Function, createIndex?: Function, findOneAndDelete?: Function}} MongoCollectionLike
+ */
+
+/**
  * MongoDB-backed persistence. The driver is injected (a `Collection` from the
  * official `mongodb` package, or any object with the same methods), so this
  * package keeps zero runtime dependencies and can be tested with a double.
@@ -63,6 +68,9 @@ export class MongoProfileStore extends ProfileStore {
   #policy;
   #maxListSize;
 
+  /**
+   * @param {{collection?: MongoCollectionLike|any, logger?: {debug?: Function, info?: Function, warn?: Function, error?: Function}, timeoutMs?: number, retry?: object, breaker?: object, maxListSize?: number}} [options]
+   */
   constructor({ collection, logger = noopLogger, timeoutMs, retry, breaker, maxListSize = 1_000 } = {}) {
     super();
     if (!collection || typeof collection.findOne !== 'function') {
@@ -87,6 +95,7 @@ export class MongoProfileStore extends ProfileStore {
     return true;
   }
 
+  /** @param {Profile} profile @returns {Promise<Profile>} */
   async create(profile) {
     assertSafeId(profile?.id, 'profile.id');
     try {
@@ -100,12 +109,14 @@ export class MongoProfileStore extends ProfileStore {
     return this.get(profile.id);
   }
 
+  /** @param {string|any} id @returns {Promise<Profile|undefined>} */
   async get(id) {
     assertSafeId(id);
     const document = await this.#policy.execute(() => this.#collection.findOne({ id }, { projection: { _id: 0 } }));
     return stripInternalFields(document);
   }
 
+  /** @param {string|any} id @param {Profile} profile @returns {Promise<Profile|undefined>} */
   async update(id, profile) {
     assertSafeId(id);
     const update = { $set: { ...profile, id, updatedAt: new Date().toISOString() } };
@@ -131,6 +142,10 @@ export class MongoProfileStore extends ProfileStore {
    * Lists profiles with a hard page size. Unbounded `find()` results are the
    * classic way a service with a growing collection runs out of memory.
    */
+  /**
+   * @param {{limit?: number, cursor?: string|any}} [options]
+   * @returns {Promise<Profile[]>}
+   */
   async list({ limit = this.#maxListSize, cursor } = {}) {
     const pageSize = Math.min(Number.isInteger(limit) && limit > 0 ? limit : this.#maxListSize, this.#maxListSize);
     const filter = cursor === undefined ? {} : { id: { $gt: assertSafeId(cursor, 'cursor') } };
@@ -146,6 +161,10 @@ export class MongoProfileStore extends ProfileStore {
    * Case-insensitive search over `displayName` and `contact.email` with keyset
    * pagination by `id`. The query text is regex-escaped so it is always
    * matched literally. Returns `{ items, nextCursor }`.
+   */
+  /**
+   * @param {import('../profile/memory-store.js').ProfileSearchCriteria} [criteria]
+   * @returns {Promise<import('../profile/memory-store.js').ProfileSearchResult>}
    */
   async search(criteria = {}) {
     const { query, status, includeDeleted, limit, cursor } = normalizeProfileSearch(criteria);
@@ -196,6 +215,9 @@ export class MongoAccountStore extends AccountStore {
   #collection;
   #policy;
 
+  /**
+   * @param {{collection?: MongoCollectionLike|any, logger?: {debug?: Function, info?: Function, warn?: Function, error?: Function}, timeoutMs?: number, retry?: object, breaker?: object}} [options]
+   */
   constructor({ collection, logger = noopLogger, timeoutMs, retry, breaker } = {}) {
     super();
     if (!collection || typeof collection.findOne !== 'function' || typeof collection.replaceOne !== 'function') {
@@ -220,6 +242,7 @@ export class MongoAccountStore extends AccountStore {
     return true;
   }
 
+  /** @param {{id: string, email?: string, [key: string]: any}} account @returns {Promise<{id: string, email?: string, [key: string]: any}|undefined>} */
   async upsert(account) {
     assertSafeId(account?.id, 'account.id');
     const { emailLower: _ignored, ...rest } = account;
@@ -238,12 +261,14 @@ export class MongoAccountStore extends AccountStore {
     return this.findById(account.id);
   }
 
+  /** @param {string|any} id @returns {Promise<{id: string, email?: string, [key: string]: any}|undefined>} */
   async findById(id) {
     assertSafeId(id);
     const document = await this.#policy.execute(() => this.#collection.findOne({ id }, { projection: { _id: 0 } }));
     return toAccount(document);
   }
 
+  /** @param {string|any} email @returns {Promise<{id: string, email?: string, [key: string]: any}|undefined>} */
   async findByEmail(email) {
     if (typeof email !== 'string' || email.length === 0 || email.length > 320) {
       return undefined;
@@ -279,6 +304,9 @@ export class MongoDeadLetterStore extends DeadLetterStore {
   #maxDrain;
   #encryptionKey;
 
+  /**
+   * @param {{collection?: MongoCollectionLike|any, logger?: {debug?: Function, info?: Function, warn?: Function, error?: Function}, timeoutMs?: number, retry?: object, breaker?: object, ttlSeconds?: number, maxDrain?: number, encryptionKey?: string}} [options]
+   */
   constructor({ collection, logger = noopLogger, timeoutMs, retry, breaker, ttlSeconds = 1_209_600, maxDrain = 500, encryptionKey } = {}) {
     super();
     if (!collection || typeof collection.insertOne !== 'function') {

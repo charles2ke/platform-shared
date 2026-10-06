@@ -1,5 +1,9 @@
 import { createError } from '../shared/errors.js';
 
+/**
+ * @typedef {{notification: any, scheduledFor: string, attempts?: number}} SchedulerEntry
+ */
+
 function notImplemented(method) {
   throw createError('NOTIFICATION_SCHEDULER_NOT_IMPLEMENTED', `NotificationScheduler.${method}() must be implemented`, { status: 500 });
 }
@@ -9,26 +13,32 @@ function notImplemented(method) {
  * queue (SQS, BullMQ, cron table) and pass the instance to `NotificationService`.
  */
 export class NotificationScheduler {
+  /** @param {any} notification @param {Date|string|number} scheduledFor @param {number} [attempts] @returns {Promise<SchedulerEntry>} */
   async enqueue(notification, scheduledFor) {
     return notImplemented('enqueue');
   }
 
+  /** @param {Date|string|number} [now] @returns {Promise<SchedulerEntry[]>} */
   async dequeueDue(now) {
     return notImplemented('dequeueDue');
   }
 
+  /** @param {any} notification @param {Date|string|number} scheduledFor @param {number} attempts @returns {Promise<SchedulerEntry>} */
   async requeue(notification, scheduledFor, attempts) {
     return notImplemented('requeue');
   }
 
+  /** @param {string} notificationId @returns {Promise<number|boolean>} */
   async cancel(notificationId) {
     return notImplemented('cancel');
   }
 
+  /** @param {Date|string|number} [now] @returns {Promise<number>} */
   async countPending(now) {
     return notImplemented('countPending');
   }
 
+  /** @returns {Promise<SchedulerEntry[]>} */
   async list() {
     return notImplemented('list');
   }
@@ -41,6 +51,7 @@ export class NotificationScheduler {
 export class InMemoryNotificationScheduler extends NotificationScheduler {
   #entries = [];
 
+  /** @param {any} notification @param {Date|string|number} scheduledFor @param {number} [attempts] @returns {Promise<SchedulerEntry>} */
   async enqueue(notification, scheduledFor, attempts = 0) {
     const entry = {
       notification,
@@ -51,6 +62,7 @@ export class InMemoryNotificationScheduler extends NotificationScheduler {
     return { ...entry };
   }
 
+  /** @param {Date|string|number} [now] @returns {Promise<SchedulerEntry[]>} */
   async dequeueDue(now = new Date()) {
     const nowDate = normalizeDate(now);
     const due = [];
@@ -67,6 +79,7 @@ export class InMemoryNotificationScheduler extends NotificationScheduler {
     return due.map((entry) => ({ ...entry }));
   }
 
+  /** @param {any} notification @param {Date|string|number} scheduledFor @param {number} attempts @returns {Promise<SchedulerEntry>} */
   async requeue(notification, scheduledFor, attempts) {
     return this.enqueue(notification, scheduledFor, attempts);
   }

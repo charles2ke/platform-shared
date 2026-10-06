@@ -4,6 +4,7 @@ import { createNotificationWorker, replayDeadLetters } from '../src/adapters/ind
 /**
  * Travel schedules trip reminders ahead of departure and drains them from a
  * cron/worker loop through `dispatchDueReminders()`.
+ * @param {{adapters?: any, scheduler?: InMemoryNotificationScheduler, logger?: any, deadLetterStore?: InMemoryDeadLetterQueue}} options
  */
 export function createTravelNotifications({ adapters, scheduler = new InMemoryNotificationScheduler(), logger, deadLetterStore = new InMemoryDeadLetterQueue() }) {
   const notifications = new NotificationService({

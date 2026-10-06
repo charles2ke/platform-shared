@@ -36,7 +36,8 @@ examples/          Integration stubs for social, travel, workout, and basa
 - Includes RBAC scaffolding with role and permission checks, a `createRoleRegistry()` role-to-permission map with inheritance, `resolvePrincipal()` for expanding token roles into permissions, and `authorize()` for enforcement outside route guards.
 - Role inheritance also applies to role checks: `registry.rolesFor()` expands inherited roles and `resolvePrincipal()` stores them on `principal.effectiveRoles` (token `roles` stay untouched), so a `coach` that inherits `athlete` satisfies `{ roles: ['athlete'] }`.
 - `createAccessPolicy({ 'profile.update': { permissions: ['profile:write'] } })` maps action names to requirements so RBAC is enforced inside services, jobs, and queue consumers, not only on HTTP routes. `ProfileService` and `NotificationService` accept the resulting `policy` (or a plain requirement map) and a `roleRegistry`; callers then pass `{ principal }` per call. Actions without requirements stay open; a missing principal fails with `AUTH_PRINCIPAL_REQUIRED` unless `requirePrincipal: false`.
-- Exposes an `AccountStore` interface plus an `InMemoryAccountStore` default that can be replaced by persistent adapters later.
+- Exposes an `AccountStore` interface plus an `InMemoryAccountStore` default; `MongoAccountStore` (in `storage`) is a persistent adapter with case-insensitive `findByEmail()` backed by a unique index (duplicate emails fail with `AUTH_ACCOUNT_EMAIL_CONFLICT`, 409).
+- `createLoginThrottle({ maxAttempts, windowMs, lockoutMs, maxEntries })` slows password guessing: `recordFailure(key)` counts failures per caller-chosen key (account, IP, or both), `assertAllowed(key)` throws `AUTH_LOGIN_LOCKED` (429, `details.retryAfterSeconds`) while a key is locked out, and `recordSuccess(key)` clears it. It is synchronous, in-process, and memory-bounded; scaled-out deployments that need a shared view should provide a shared implementation of the same methods.
 
 ### Profile
 
@@ -44,11 +45,15 @@ examples/          Integration stubs for social, travel, workout, and basa
 - Normalizes display names, email addresses, locale/timezone defaults, and status.
 - Provides validation helpers and `ProfileService` over the replaceable `ProfileStore` interface.
 - Ships `InMemoryProfileStore` for tests, prototypes, and local development.
+- `softDelete(id)` marks a profile `deleted` with a `deletedAt` timestamp (enforces `profile.delete`); `restore(id, { status })` brings it back (default `active`; enforces `profile.restore`, or `profile.delete` when no `profile.restore` requirement is configured). `delete(id)` still removes permanently.
+- `search({ query, status, includeDeleted, limit, cursor })` matches `query` case-insensitively against display name and email, hides soft-deleted profiles by default, and returns `{ items, nextCursor }` ordered by `id` (enforces `profile.search`, or `profile.list` when not configured). Stores may implement `search()` natively (`InMemoryProfileStore`, `MongoProfileStore`, and `CachedProfileStore` do); otherwise the service filters `store.list()`, which is only complete if `list()` returns every profile.
 
 ### Notifications
 
 - Provides one API for sending or scheduling notifications.
 - Supports email, SMS, and push channel abstraction.
+- `strategy: 'fallback'` tries `channels` in order and stops at the first channel that does not fail (for example push, then SMS, then email); the result is `sent` if any channel delivered. The default `strategy: 'all'` delivers on every channel.
+- Quiet hours: when a notification carries `quietHours: { start: '22:00', end: '07:00', timezone }`, `send()` queues it for the end of the window (result `status: 'pending'`, `deferred: true`) and `schedule()` shifts times that fall inside the window. `bypassQuietHours: true` sends urgent messages immediately. `quietHoursFromProfile(profile)` reads `profile.preferences.quietHours` and defaults the timezone to `profile.timezone`. Quiet hours are evaluated at `send()`/`schedule()` time; retries queued by `dispatchScheduled()` are not re-checked.
 - Renders `{{variable}}` template placeholders from provided variables.
 - Returns delivery status objects with `sent`, `failed`, `partial`, or `pending` states.
 - Includes an in-memory scheduling workflow via `schedule()` and `dispatchScheduled()` for queue handoff patterns.
@@ -74,6 +79,12 @@ examples/          Integration stubs for social, travel, workout, and basa
 ### Runtime
 
 - `createBackgroundWorker({ handler, intervalMs })` is a generic background job runner: schedule it with `start()` / `stop()` or trigger it on demand with `runOnce()` from an HTTP route, CLI command, or external cron. Overlapping runs are skipped, `timeoutMs` bounds a run, failures are normalized to `PlatformError` (and forwarded to `onError` instead of thrown when supplied), and `getStats()` exposes run counters for metrics and health endpoints.
+
+### Cache
+
+- `createRedisCache({ client, ttlSeconds, ttlByPrefix, metrics })` is a fail-open two-tier cache (bounded in-process LRU in front of an injected Redis client) with single-flight `getOrLoad()`. When a `metrics` registry is supplied it records `cache_hits_total`, `cache_misses_total`, and `cache_errors_total`.
+- `ttlByPrefix: { 'profile:': 600, 'profile:hot:': 30 }` sets default TTLs per key prefix; the longest matching prefix wins, an explicit `set(key, value, { ttl })` still overrides, and `ttlFor(key)` reports the effective TTL.
+- `CachedProfileStore` wraps any `ProfileStore` with read-through caching and passes `search()` through uncached.
 
 ### Shared
 
@@ -214,6 +225,12 @@ const profile = await profiles.create({
   contact: { email: 'charles@example.com' },
   preferences: { units: 'metric' }
 });
+
+await profiles.softDelete(profile.id);
+await profiles.restore(profile.id);
+
+const page = await profiles.search({ query: 'charles', limit: 20 });
+const next = await profiles.search({ query: 'charles', limit: 20, cursor: page.nextCursor });
 ```
 
 ### Plug in persistent stores and providers
@@ -236,6 +253,38 @@ class EmailProviderAdapter extends ChannelAdapter {
 ```
 
 Unimplemented interface methods throw structured `PlatformError`s instead of failing silently.
+
+### Fallback channels and quiet hours
+
+```js
+import { NotificationService, quietHoursFromProfile } from '@charles2ke/platform-shared/notifications';
+
+await notifications.send({
+  id: 'trip-reminder-42',
+  channels: ['push', 'sms', 'email'],
+  strategy: 'fallback',
+  quietHours: quietHoursFromProfile(profile), // e.g. 22:00-07:00 in the profile's timezone
+  body: 'Your flight boards in 3 hours'
+});
+```
+
+### Throttle failed logins
+
+```js
+import { createLoginThrottle } from '@charles2ke/platform-shared/auth';
+
+const throttle = createLoginThrottle({ maxAttempts: 5, windowMs: 15 * 60_000, lockoutMs: 15 * 60_000 });
+
+function login(email, password, ip) {
+  const keys = [`account:${email.toLowerCase()}`, `ip:${ip}`];
+  keys.forEach((key) => throttle.assertAllowed(key)); // throws AUTH_LOGIN_LOCKED (429)
+  if (!checkPassword(email, password)) {
+    keys.forEach((key) => throttle.recordFailure(key));
+    throw new Error('Invalid credentials');
+  }
+  keys.forEach((key) => throttle.recordSuccess(key));
+}
+```
 
 ### Send notifications
 
@@ -372,6 +421,17 @@ npm run audit          # production dependency audit (high severity and above)
 ```
 
 `npm run build` performs syntax checks across source, tests, examples, and scripts.
+
+### TypeScript declarations
+
+Type declarations are generated from the JSDoc in `src/` with the `typescript` dev dependency and are not committed:
+
+```bash
+npm run types        # emit .d.ts files into types/ (also runs on npm install/prepare and before publish)
+npm run check:types  # type-check examples/ and tests/ against the JSDoc-derived types
+```
+
+Every `exports` subpath has a matching `types` entry, so `import { verifyToken } from '@charles2ke/platform-shared/auth'` is typed in TypeScript and editor tooling.
 
 ## Enterprise readiness
 

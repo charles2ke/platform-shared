@@ -1,14 +1,27 @@
 import { createError } from '../shared/errors.js';
 
 /**
+ * @typedef {{id?: string, sessionId?: string, roles?: string[], effectiveRoles?: string[], permissions?: string[], claims?: Record<string, any>, [key: string]: any}} Principal
+ * @typedef {{roles?: any, permissions?: any, requireAllRoles?: boolean, requireAllPermissions?: boolean}} AccessRequirements
+ * @typedef {{roles?: () => string[], rolesFor?: (roles?: any) => string[], permissionsFor: (roles?: any) => string[]}} RoleRegistry
+ */
+
+/**
  * Checks a role against `effectiveRoles` (roles expanded through registry
  * inheritance by `resolvePrincipal()`) and falls back to the raw token roles.
+ *
+ * @param {Principal} principal
+ * @param {string} role
  */
 export function hasRole(principal, role) {
   const roles = Array.isArray(principal?.effectiveRoles) ? principal.effectiveRoles : principal?.roles;
   return typeof role === 'string' && Array.isArray(roles) && roles.includes(role);
 }
 
+/**
+ * @param {Principal} principal
+ * @param {string} permission
+ */
 export function hasPermission(principal, permission) {
   if (typeof permission !== 'string' || !Array.isArray(principal?.permissions)) {
     return false;
@@ -20,6 +33,10 @@ export function hasPermission(principal, permission) {
 /**
  * Returns true when role/permission requirements are satisfied.
  * Invalid requirement shapes fail closed and return false.
+ */
+/**
+ * @param {Principal} principal
+ * @param {AccessRequirements|any} [requirements]
  */
 export function meetsRequirements(principal, { roles = [], permissions = [], requireAllRoles = false, requireAllPermissions = true } = {}) {
   const normalizedRoles = normalizeRequirements(roles);
@@ -83,7 +100,8 @@ function permissionMatches(grantedPermission, requiredPermission) {
  * Builds a role -> permission registry so downstream apps can keep tokens small
  * and enforce permissions from roles. Roles may inherit other roles.
  *
- * @param {Record<string, string[]|{permissions?: string[], inherits?: string[]}>} definitions
+ * @param {any} definitions
+ * @returns {RoleRegistry}
  */
 export function createRoleRegistry(definitions = {}) {
   if (definitions === null || typeof definitions !== 'object' || Array.isArray(definitions)) {
@@ -170,6 +188,11 @@ export function createRoleRegistry(definitions = {}) {
  * inherited roles on `effectiveRoles`, leaving the token `roles` untouched.
  * Returns the principal unchanged when no registry is supplied.
  */
+/**
+ * @param {Principal} principal
+ * @param {RoleRegistry|any} [roleRegistry]
+ * @returns {Principal}
+ */
 export function resolvePrincipal(principal, roleRegistry) {
   if (!roleRegistry) {
     return principal;
@@ -191,6 +214,11 @@ export function resolvePrincipal(principal, roleRegistry) {
 /**
  * Enforces requirements outside of route guards (jobs, queue consumers, RPC).
  * Throws a 403 PlatformError when the principal is not authorized.
+ */
+/**
+ * @param {Principal} principal
+ * @param {AccessRequirements|any} [requirements]
+ * @returns {Principal}
  */
 export function authorize(principal, requirements = {}) {
   if (!meetsRequirements(principal, requirements)) {

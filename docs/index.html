@@ -102,6 +102,7 @@
       <a href="#profile">Profiles</a>
       <a href="#notifications">Notifications</a>
       <a href="#adapters">Adapters</a>
+      <a href="#cache">Cache</a>
       <a href="#shared">Config &amp; errors</a>
       <a href="#hardening">Hardening</a>
       <a href="#config">Environment</a>
@@ -145,7 +146,10 @@
 npm test          # Node built-in test runner
 npm run build     # syntax check across src, tests, examples, scripts
 npm run check     # build + test
-npm run audit     # production dependency audit</code></pre>
+npm run audit     # production dependency audit
+npm run types     # generate .d.ts declarations into types/
+npm run check:types  # type-check examples and tests against the declarations</code></pre>
+  <p>Every subpath export ships TypeScript declarations generated from the JSDoc in <code>src/</code>.</p>
   <p>Subpath exports keep imports explicit:</p>
 <pre><code>import { issueTokenPair } from '@charles2ke/platform-shared/auth';
 import { ProfileService } from '@charles2ke/platform-shared/profile';
@@ -182,6 +186,14 @@ import { loadConfig, PlatformError } from '@charles2ke/platform-shared/shared';<
         <li><code>resolvePrincipal()</code> exposes <code>effectiveRoles</code></li>
         <li><code>createAccessPolicy()</code> action-keyed requirements</li>
         <li><code>authorize()</code> outside HTTP routes</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>Login protection and accounts</h3>
+      <ul>
+        <li><code>createLoginThrottle()</code> locks a key after repeated failures (<code>AUTH_LOGIN_LOCKED</code>, 429)</li>
+        <li><code>recordFailure()</code> / <code>recordSuccess()</code> per account or IP key</li>
+        <li><code>MongoAccountStore</code> persistent accounts with case-insensitive email lookup</li>
       </ul>
     </div>
   </div>
@@ -265,6 +277,17 @@ const profile = await profiles.create({
   contact: { email: 'charles@example.com' },
   preferences: { units: 'metric' }
 });</code></pre>
+<pre><code>await profiles.softDelete(profile.id);   // status 'deleted' + deletedAt
+await profiles.restore(profile.id);      // back to 'active'
+
+const page = await profiles.search({ query: 'charles', limit: 20 });
+const next = await profiles.search({ query: 'charles', limit: 20, cursor: page.nextCursor });</code></pre>
+  <p>
+    <code>search()</code> hides soft-deleted profiles unless <code>includeDeleted</code> or a
+    <code>status</code> is passed. <code>restore()</code> and <code>search()</code> enforce
+    <code>profile.restore</code> / <code>profile.search</code>, falling back to
+    <code>profile.delete</code> / <code>profile.list</code> when those are not configured.
+  </p>
   <p>
     Swap <code>InMemoryProfileStore</code> for an app-owned adapter by extending
     <code>ProfileStore</code>; unimplemented methods throw structured errors instead of failing
@@ -278,7 +301,14 @@ const profile = await profiles.create({
     <div class="card">
       <h3>Delivery</h3>
       <p>One API for email, SMS, and push. <code>{{variable}}</code> template rendering and
-      delivery statuses of <code>sent</code>, <code>failed</code>, <code>partial</code>, or <code>pending</code>.</p>
+      delivery statuses of <code>sent</code>, <code>failed</code>, <code>partial</code>, or <code>pending</code>.
+      <code>strategy: 'fallback'</code> tries channels in order until one delivers.</p>
+    </div>
+    <div class="card">
+      <h3>Quiet hours</h3>
+      <p><code>quietHours: { start: '22:00', end: '07:00', timezone }</code> defers <code>send()</code>
+      and shifts <code>schedule()</code> to the end of the window. <code>quietHoursFromProfile()</code>
+      reads profile preferences; <code>bypassQuietHours</code> is for urgent messages.</p>
     </div>
     <div class="card">
       <h3>Scheduling</h3>
@@ -323,7 +353,14 @@ await notifications.send({
 await notifications.schedule(reminder, new Date(Date.now() + 60_000));
 
 const { processed, retried, deadLettered, pending, pendingKnown } =
-  await notifications.dispatchScheduled();</code></pre>
+  await notifications.dispatchScheduled();
+
+await notifications.send({
+  channels: ['push', 'sms', 'email'],
+  strategy: 'fallback',
+  quietHours: quietHoursFromProfile(profile),
+  body: 'Your flight boards in 3 hours'
+});</code></pre>
 </section>
 
 <section id="adapters">
@@ -339,6 +376,21 @@ const { processed, retried, deadLettered, pending, pendingKnown } =
       <tr><td><code>replayDeadLetters({ service, store })</code></td><td>Re-queue dead-lettered notifications after an outage.</td></tr>
     </tbody>
   </table>
+</section>
+
+<section id="cache">
+  <h2>Cache: fail-open Redis with per-prefix TTLs</h2>
+<pre><code>import { CachedProfileStore, createRedisCache } from '@charles2ke/platform-shared/cache';
+
+const cache = createRedisCache({
+  client: redis,
+  ttlSeconds: 300,
+  ttlByPrefix: { 'profile:': 600, 'profile:hot:': 30 }, // longest prefix wins
+  metrics // optional: cache_hits_total, cache_misses_total, cache_errors_total
+});
+
+cache.ttlFor('profile:hot:42'); // 30
+const store = new CachedProfileStore({ store: mongoProfiles, cache });</code></pre>
 </section>
 
 <section id="shared">

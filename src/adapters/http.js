@@ -3,6 +3,9 @@ import { normalizeError } from '../shared/errors.js';
 /**
  * Maps any thrown error to an HTTP status and a JSON body so every consumer
  * repo returns the same error envelope.
+ *
+ * @param {unknown} error
+ * @returns {{status: number, body: {error: {code: string, message: string, status: number, details?: any}}}}
  */
 export function toHttpErrorResponse(error) {
   const normalized = normalizeError(error);
@@ -14,7 +17,7 @@ export function toHttpErrorResponse(error) {
  * On success it attaches the principal to `request[principalKey]` and calls
  * `next()`; on failure it answers with the shared error envelope.
  *
- * @param {Function} guard A guard created by `createAuthGuard()`.
+ * @param {any} guard A guard created by `createAuthGuard()`.
  * @param {{requirements?: object, principalKey?: string}} [options]
  */
 export function createExpressAuthMiddleware(guard, { requirements = {}, principalKey = 'principal' } = {}) {
@@ -42,8 +45,8 @@ export function createExpressAuthMiddleware(guard, { requirements = {}, principa
  * Calls `handler(request, { principal })` when authorized and returns a JSON
  * response with the shared error envelope otherwise.
  *
- * @param {Function} handler Route handler.
- * @param {Function} guard A guard created by `createAuthGuard()`.
+ * @param {(request: object, context: {principal: any}, ...args: any[]) => any} handler Route handler.
+ * @param {any} guard A guard created by `createAuthGuard()`.
  * @param {object} [requirements] Role/permission requirements.
  */
 export function withFetchAuth(handler, guard, requirements = {}) {

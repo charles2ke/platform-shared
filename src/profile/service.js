@@ -6,6 +6,13 @@ import { searchProfiles } from './search.js';
 import { assertValidProfile, normalizeProfile } from './validation.js';
 
 /**
+ * @typedef {import('./memory-store.js').Profile} ServiceProfile
+ * @typedef {import('./memory-store.js').ProfileStore} ServiceProfileStore
+ * @typedef {import('../auth/policy.js').AccessPolicy} ProfileAccessPolicy
+ * @typedef {{principal?: import('../auth/rbac.js').Principal, [key: string]: any}} ServiceOptions
+ */
+
+/**
  * Profile CRUD over a replaceable store. Supplying `policy` enforces RBAC on
  * every call (`profile.create`, `profile.get`, `profile.update`,
  * `profile.delete`, `profile.list`, plus `profile.restore` and
@@ -15,6 +22,9 @@ import { assertValidProfile, normalizeProfile } from './validation.js';
  * `profile.list` are enforced instead so new methods never bypass RBAC.
  */
 export class ProfileService {
+  /**
+   * @param {{store?: ServiceProfileStore, defaults?: Partial<ServiceProfile>, policy?: ProfileAccessPolicy|Record<string, import('../auth/rbac.js').AccessRequirements>, roleRegistry?: object}} [options]
+   */
   constructor({ store = new InMemoryProfileStore(), defaults = {}, policy, roleRegistry } = {}) {
     this.store = store;
     this.defaults = defaults;
@@ -39,6 +49,11 @@ export class ProfileService {
     }
   }
 
+  /**
+   * @param {Partial<ServiceProfile> & {id?: string}} input
+   * @param {ServiceOptions} [options]
+   * @returns {Promise<ServiceProfile>}
+   */
   async create(input, options = {}) {
     this.#enforce('profile.create', options);
     const profile = normalizeProfile({ ...input, id: input?.id ?? randomUUID() }, this.defaults);
@@ -46,6 +61,11 @@ export class ProfileService {
     return this.store.create(profile);
   }
 
+  /**
+   * @param {string} id
+   * @param {ServiceOptions} [options]
+   * @returns {Promise<ServiceProfile>}
+   */
   async get(id, options = {}) {
     this.#enforce('profile.get', options);
     return this.#requireProfile(id);
@@ -59,6 +79,12 @@ export class ProfileService {
     return profile;
   }
 
+  /**
+   * @param {string} id
+   * @param {Partial<ServiceProfile>} [updates]
+   * @param {ServiceOptions} [options]
+   * @returns {Promise<ServiceProfile>}
+   */
   async update(id, updates = {}, options = {}) {
     this.#enforce('profile.update', options);
     const existing = await this.#requireProfile(id);
@@ -75,6 +101,11 @@ export class ProfileService {
     return this.store.update(id, profile);
   }
 
+  /**
+   * @param {string} id
+   * @param {ServiceOptions} [options]
+   * @returns {Promise<boolean>}
+   */
   async delete(id, options = {}) {
     this.#enforce('profile.delete', options);
     const deleted = await this.store.delete(id);
@@ -84,6 +115,10 @@ export class ProfileService {
     return true;
   }
 
+  /**
+   * @param {ServiceOptions} [options]
+   * @returns {Promise<ServiceProfile[]>}
+   */
   async list(options = {}) {
     this.#enforce('profile.list', options);
     return this.store.list();
@@ -92,6 +127,11 @@ export class ProfileService {
   /**
    * Soft delete: keeps the record but marks it `deleted` with a `deletedAt`
    * timestamp so it can be restored. Use `delete()` for permanent removal.
+   */
+  /**
+   * @param {string} id
+   * @param {ServiceOptions} [options]
+   * @returns {Promise<ServiceProfile>}
    */
   async softDelete(id, options = {}) {
     this.#enforce('profile.delete', options);
@@ -104,7 +144,12 @@ export class ProfileService {
     return this.store.update(id, profile);
   }
 
-  /** Restores a soft-deleted profile to `options.status` (default `active`). */
+  /**
+   * Restores a soft-deleted profile to `options.status` (default `active`).
+   * @param {string} id
+   * @param {ServiceOptions & {status?: string}} [options]
+   * @returns {Promise<ServiceProfile>}
+   */
   async restore(id, options = {}) {
     this.#enforceWithFallback('profile.restore', 'profile.delete', options);
     const existing = await this.#requireProfile(id);
@@ -125,7 +170,8 @@ export class ProfileService {
    * `includeDeleted`, paginated with `limit` and an opaque `cursor`.
    * Delegates to `store.search()` when available, otherwise filters
    * `store.list()` in memory.
-   * @returns {Promise<{items: object[], nextCursor?: string}>}
+   * @param {import('./memory-store.js').ProfileSearchCriteria & ServiceOptions} [criteria]
+   * @returns {Promise<import('./memory-store.js').ProfileSearchResult>}
    */
   async search({ principal, ...criteria } = {}) {
     this.#enforceWithFallback('profile.search', 'profile.list', { principal });

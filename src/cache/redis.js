@@ -17,7 +17,17 @@ import { searchProfiles } from '../profile/search.js';
 
 const DEFAULT_TTL_SECONDS = 300;
 
+/**
+ * @typedef {{get: (key: string) => Promise<string|null|undefined>|string|null|undefined, set: (key: string, value: string, mode?: string, ttl?: number) => Promise<any>|any, del?: (key: string) => Promise<any>|any, publish?: (channel: string, message: string) => Promise<any>|any}} RedisClientLike
+ * @typedef {{size?: () => number, get?: (key: string) => any, set?: (key: string, value: any) => void, delete?: (key: string) => boolean|void, clear?: () => void}|null} LocalCacheLike
+ * @typedef {{namespace: string, ttlFor: (key: string) => number, get: (key: string) => Promise<any>, set: (key: string, value: any, options?: {ttl?: number}) => Promise<any>, delete: (key: string) => Promise<boolean>, stats: () => object, healthy: () => boolean, close: () => void, getOrLoad: (key: string, loader: () => any|Promise<any>, options?: {ttl?: number}) => Promise<any>}} RedisCache
+ */
+
 /** Bounded LRU used for the in-process tier; eviction keeps memory flat. */
+/**
+ * @param {{maxEntries?: number, ttlMs?: number, now?: () => number}} [options]
+ * @returns {NonNullable<LocalCacheLike>}
+ */
 export function createLruCache({ maxEntries = 500, ttlMs = 30_000, now = () => Date.now() } = {}) {
   if (!Number.isInteger(maxEntries) || maxEntries < 1) {
     throw createError('CACHE_INVALID_SIZE', 'maxEntries must be a positive integer', { status: 500 });
@@ -72,6 +82,9 @@ export function createLruCache({ maxEntries = 500, ttlMs = 30_000, now = () => D
  * `getOrLoad()` collapses concurrent misses for the same key into a single
  * loader call (stampede protection) and always removes the in-flight promise,
  * so nothing is retained after the load settles.
+ *
+ * @param {{client?: RedisClientLike, namespace?: string, ttlSeconds?: number, logger?: {debug?: Function, info?: Function, warn?: Function, error?: Function}, metrics?: any, localCache?: LocalCacheLike, timeoutMs?: number, chaos?: any, subscriber?: any, ttlByPrefix?: any}} [options]
+ * @returns {RedisCache}
  */
 export function createRedisCache({
   client,
@@ -281,6 +294,9 @@ export class CachedProfileStore extends ProfileStore {
   #store;
   #cache;
 
+  /**
+   * @param {{store?: ProfileStore, cache?: RedisCache}} [options]
+   */
   constructor({ store, cache } = {}) {
     super();
     if (!store || typeof store.get !== 'function') {
