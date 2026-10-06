@@ -73,6 +73,13 @@ export function validateProfile(profile) {
   if (!PROFILE_STATUSES.includes(profile.status)) {
     errors.push({ field: 'status', message: `Status must be one of: ${PROFILE_STATUSES.join(', ')}` });
   }
+  if (profile.status === 'deleted') {
+    if (typeof profile.deletedAt !== 'string' || !Number.isFinite(Date.parse(profile.deletedAt))) {
+      errors.push({ field: 'deletedAt', message: 'Deleted profiles must have a valid deletion timestamp' });
+    }
+  } else if (profile.deletedAt !== undefined) {
+    errors.push({ field: 'deletedAt', message: 'Only deleted profiles may have a deletion timestamp' });
+  }
   if (!profile.timezone) {
     errors.push({ field: 'timezone', message: 'Timezone is required' });
   }

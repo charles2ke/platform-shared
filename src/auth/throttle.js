@@ -8,8 +8,9 @@ import { createError } from '../shared/errors.js';
  *
  * The throttle is synchronous and in-process, matching the revocation store
  * contract. Memory is bounded by `maxEntries`: when full, an expired or the
- * oldest unlocked key is evicted before any locked key, so flooding the
- * throttle with throwaway keys does not lift existing lockouts. Scaled-out deployments that need a shared view should wrap a
+ * oldest unlocked key is evicted before any locked key. When all entries are
+ * locked, new keys are not tracked, so flooding cannot lift existing lockouts.
+ * Scaled-out deployments that need a shared view should wrap a
  * shared store with the same `check()`/`recordFailure()`/`recordSuccess()`
  * methods.
  */
@@ -88,8 +89,8 @@ export function createLoginThrottle({
         return stateOf(normalized, entry);
       }
       if (!entry) {
-        if (entries.size >= maxEntries) {
-          evictOne();
+        if (entries.size >= maxEntries && !evictOne()) {
+          return stateOf(normalized, undefined);
         }
         entry = { failures: 0, windowStart: time, lockedUntil: undefined };
         entries.set(normalized, entry);
@@ -116,27 +117,20 @@ export function createLoginThrottle({
   };
 
   /**
-   * Frees one slot without undoing an active lockout when avoidable: an
-   * expired entry first, then the oldest unlocked entry, and only when every
-   * entry is locked, the lock that expires soonest.
+   * Frees one slot from an expired entry first, then the oldest unlocked
+   * entry. Returns false when every entry is locked.
    */
   function evictOne() {
-    let soonestLocked;
     for (const [key, entry] of entries) {
       if (!current(key)) {
-        return;
+        return true;
       }
       if (entry.lockedUntil === undefined) {
         entries.delete(key);
-        return;
-      }
-      if (!soonestLocked || entry.lockedUntil < soonestLocked[1]) {
-        soonestLocked = [key, entry.lockedUntil];
+        return true;
       }
     }
-    if (soonestLocked) {
-      entries.delete(soonestLocked[0]);
-    }
+    return false;
   }
 
   function prune() {

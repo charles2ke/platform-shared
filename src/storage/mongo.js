@@ -227,7 +227,10 @@ export class MongoAccountStore extends AccountStore {
     // Duplicate-key conflicts are permanent, so they are never retried.
     this.#policy = createPolicy('mongo:accounts', {
       timeoutMs,
-      retry: { shouldRetry: (error) => !isDuplicateKeyError(error), ...retry },
+      retry: {
+        ...retry,
+        shouldRetry: (error, attempt) => !isDuplicateKeyError(error) && (retry?.shouldRetry?.(error, attempt) ?? true)
+      },
       breaker,
       logger
     });

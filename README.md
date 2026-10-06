@@ -428,7 +428,7 @@ Type declarations are generated from the JSDoc in `src/` with the `typescript` d
 
 ```bash
 npm run types        # emit .d.ts files into types/ (also runs on npm install/prepare and before publish)
-npm run check:types  # type-check examples/ and tests/ against the JSDoc-derived types
+npm run check:types  # type-check the TypeScript consumer tests against the JSDoc-derived types
 ```
 
 Every `exports` subpath has a matching `types` entry, so `import { verifyToken } from '@charles2ke/platform-shared/auth'` is typed in TypeScript and editor tooling.

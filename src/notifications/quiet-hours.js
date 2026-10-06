@@ -76,7 +76,7 @@ export function isWithinQuietHours(date, quietHours) {
 /**
  * Earliest delivery time at or after `date` that is outside quiet hours.
  * Returns `date` unchanged when it is already outside the window. The result
- * is corrected once for a DST offset change inside the window.
+ * is corrected for DST offset changes inside the window.
  */
 export function nextAllowedDeliveryTime(date, quietHours) {
   const normalized = normalizeQuietHours(quietHours);
@@ -92,6 +92,9 @@ export function nextAllowedDeliveryTime(date, quietHours) {
     drift -= MINUTES_PER_DAY;
   }
   candidate += drift * 60_000;
+  while (isWithinQuietHours(new Date(candidate), normalized)) {
+    candidate += 60_000;
+  }
   return new Date(Math.max(candidate, from.getTime()));
 }
 

@@ -86,12 +86,13 @@ export class NotificationService {
    */
   async send(notification, options = {}) {
     this.#enforce('notification.send', options);
+    const validated = validateNotification(notification);
     const deferUntil = quietHoursDeferral(notification, options.now ?? new Date());
     if (deferUntil) {
       const pending = await this.#enqueue(notification, deferUntil);
       return { ...pending, deferred: true };
     }
-    return this.#deliver(notification);
+    return this.#deliver(notification, validated);
   }
 
   /** Delivery without a policy check, used by already-authorized dispatch runs. */
@@ -99,12 +100,8 @@ export class NotificationService {
    * @param {ServiceNotificationMessage} notification
    * @returns {Promise<DeliveryResult>}
    */
-  async #deliver(notification) {
-    const channels = normalizeChannels(notification);
-    if (channels.length === 0) {
-      throw createError('NOTIFICATION_CHANNEL_REQUIRED', 'At least one notification channel is required', { status: 400 });
-    }
-    const strategy = normalizeStrategy(notification);
+  async #deliver(notification, validated = validateNotification(notification)) {
+    const { channels, strategy } = validated;
 
     const rendered = {
       ...notification,
@@ -463,6 +460,14 @@ function normalizeChannels(notification) {
   }
 
   return [...new Set(channels)];
+}
+
+function validateNotification(notification) {
+  const channels = normalizeChannels(notification);
+  if (channels.length === 0) {
+    throw createError('NOTIFICATION_CHANNEL_REQUIRED', 'At least one notification channel is required', { status: 400 });
+  }
+  return { channels, strategy: normalizeStrategy(notification) };
 }
 
 function normalizeStrategy(notification) {

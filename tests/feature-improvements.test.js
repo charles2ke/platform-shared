@@ -61,6 +61,18 @@ test('login throttle does not lift active lockouts when flooded with new keys', 
   assert.equal(throttle.size(), 3);
 });
 
+test('login throttle keeps all active lockouts when its capacity is full', () => {
+  const throttle = createLoginThrottle({ maxAttempts: 1, maxEntries: 2 });
+  throttle.recordFailure('locked-a');
+  throttle.recordFailure('locked-b');
+
+  throttle.recordFailure('throwaway');
+
+  assert.equal(throttle.check('locked-a').allowed, false);
+  assert.equal(throttle.check('locked-b').allowed, false);
+  assert.equal(throttle.size(), 2);
+});
+
 // --- Mongo test double ------------------------------------------------------
 
 function matches(document, filter) {
@@ -148,6 +160,26 @@ test('MongoAccountStore upserts accounts and finds them by case-insensitive emai
   assert.equal((await store.findById('acct-1')).email, 'new@example.com');
 });
 
+test('MongoAccountStore never retries duplicate emails when a custom retry predicate allows retries', async () => {
+  const collection = fakeCollection({ uniqueFields: ['emailLower'] });
+  const attempts = [];
+  const replaceOne = collection.replaceOne.bind(collection);
+  collection.replaceOne = async (...args) => {
+    attempts.push(args);
+    return replaceOne(...args);
+  };
+  const store = new MongoAccountStore({
+    collection,
+    retry: { retries: 3, shouldRetry: () => true, sleep: async () => {} }
+  });
+
+  await store.upsert({ id: 'acct-1', email: 'user@example.com' });
+  await assert.rejects(() => store.upsert({ id: 'acct-2', email: 'user@example.com' }), {
+    code: 'AUTH_ACCOUNT_EMAIL_CONFLICT'
+  });
+  assert.equal(attempts.length, 2);
+});
+
 // --- Profile: soft delete, restore, search ----------------------------------
 
 async function seededService(options) {
@@ -175,6 +207,29 @@ test('soft-deletes and restores profiles', async () => {
   await service.softDelete('p-2');
   await assert.rejects(() => service.restore('p-2', { status: 'deleted' }), { code: 'PROFILE_VALIDATION_FAILED' });
   await assert.rejects(() => service.softDelete('missing'), { code: 'PROFILE_NOT_FOUND' });
+});
+
+test('profile validation requires a valid deletedAt only for deleted profiles', async () => {
+  const service = new ProfileService();
+  await assert.rejects(
+    () => service.create({ id: 'active-with-deleted-at', displayName: 'Active', deletedAt: '2026-01-01T00:00:00Z' }),
+    { code: 'PROFILE_VALIDATION_FAILED' }
+  );
+  await assert.rejects(
+    () => service.create({ id: 'deleted-without-deleted-at', displayName: 'Deleted', status: 'deleted' }),
+    { code: 'PROFILE_VALIDATION_FAILED' }
+  );
+  await assert.rejects(
+    () => service.create({ id: 'deleted-with-invalid-deleted-at', displayName: 'Deleted', status: 'deleted', deletedAt: 'not-a-date' }),
+    { code: 'PROFILE_VALIDATION_FAILED' }
+  );
+  const deleted = await service.create({
+    id: 'deleted-with-valid-deleted-at',
+    displayName: 'Deleted',
+    status: 'deleted',
+    deletedAt: '2026-01-01T00:00:00.000Z'
+  });
+  assert.equal(deleted.deletedAt, '2026-01-01T00:00:00.000Z');
 });
 
 test('searches profiles with filtering and cursor pagination', async () => {
@@ -348,6 +403,10 @@ test('quiet hours helpers handle wrap-around windows, timezones, and DST', () =>
   // Spring-forward and fall-back nights still end at 07:00 local time.
   assert.equal(nextAllowedDeliveryTime('2026-03-08T05:00:00Z', quietHours).toISOString(), '2026-03-08T11:00:00.000Z');
   assert.equal(nextAllowedDeliveryTime('2026-11-01T04:00:00Z', quietHours).toISOString(), '2026-11-01T12:00:00.000Z');
+  const nonexistentEnd = { start: '22:00', end: '02:30', timezone: 'America/New_York' };
+  const nextAllowed = nextAllowedDeliveryTime('2026-03-08T05:30:00Z', nonexistentEnd);
+  assert.equal(nextAllowed.toISOString(), '2026-03-08T07:00:00.000Z');
+  assert.equal(isWithinQuietHours(nextAllowed, nonexistentEnd), false);
   assert.equal(isWithinQuietHours('2026-06-01T13:30:00Z', { start: '13:00', end: '14:00' }), true);
 
   assert.throws(() => normalizeQuietHours({ start: '25:00', end: '07:00' }), { code: 'NOTIFICATION_INVALID_QUIET_HOURS' });
@@ -371,6 +430,15 @@ test('send() defers notifications during quiet hours and schedule() shifts into 
   assert.equal(deferred.deferred, true);
   assert.equal(deferred.scheduledFor, '2026-06-02T07:00:00.000Z');
   assert.equal(email.deliveries.length, 0);
+  await assert.rejects(
+    () => service.send({ id: 'q-invalid-channels', quietHours }, { now: new Date('2026-06-01T23:00:00Z') }),
+    { code: 'NOTIFICATION_CHANNEL_REQUIRED', status: 400 }
+  );
+  await assert.rejects(
+    () => service.send({ id: 'q-invalid-strategy', channels: 'email', strategy: 'unknown', quietHours }, { now: new Date('2026-06-01T23:00:00Z') }),
+    { code: 'NOTIFICATION_INVALID_STRATEGY', status: 400 }
+  );
+  assert.equal((await service.listScheduled()).length, 1);
 
   const urgent = await service.send({ id: 'q-2', channels: 'email', body: 'Now', quietHours, bypassQuietHours: true }, { now: new Date('2026-06-01T23:00:00Z') });
   assert.equal(urgent.status, DELIVERY_STATUS.SENT);
