@@ -2,6 +2,11 @@ import { normalizeError } from '../shared/errors.js';
 import { noopLogger } from '../shared/logger.js';
 
 /**
+ * @typedef {{status: string, checks?: Array<{name: string, critical: boolean, status: string, durationMs: number, error?: string}>}} HealthResult
+ * @typedef {{beginDraining?: () => void, ready?: () => Promise<HealthResult>, live?: () => object, isStarted?: () => boolean}} HealthRegistryLike
+ */
+
+/**
  * Kubernetes probe support. A pod reports three independent signals:
  * - startup: has the process finished booting (slow dependency warm-up)?
  * - liveness: is the process still healthy, or should the kubelet restart it?
@@ -9,6 +14,7 @@ import { noopLogger } from '../shared/logger.js';
  *
  * Checks are registered by name, run with a deadline, and cached briefly so a
  * probe storm cannot amplify load onto Mongo/Redis/Kafka.
+ * @param {{logger?: {debug?: Function, info?: Function, warn?: Function, error?: Function}, checkTimeoutMs?: number, cacheMs?: number, now?: () => number}} [options]
  */
 export function createHealthRegistry({
   logger = noopLogger,
@@ -111,6 +117,7 @@ export function createHealthRegistry({
  * work finish within `gracePeriodMs`, then close dependencies in reverse
  * registration order. Signal listeners are always removed, so repeated
  * start/stop cycles (tests, rolling restarts) retain nothing.
+ * @param {{health?: HealthRegistryLike, logger?: {debug?: Function, info?: Function, warn?: Function, error?: Function}, gracePeriodMs?: number, signals?: string[], processRef?: any, exit?: (code: any) => any}} [options]
  */
 export function createGracefulShutdown({
   health,

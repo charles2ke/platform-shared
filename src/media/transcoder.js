@@ -3,10 +3,17 @@ import { noopLogger } from '../shared/logger.js';
 import { MEDIA_KINDS, SAFE_JOB_ID, TRANSCODE_STATUS, normalizeTranscodeJob } from './types.js';
 
 /**
+ * @typedef {ReturnType<typeof normalizeTranscodeJob>} TranscodeJob
+ * @typedef {{signal?: AbortSignal}} TranscodeContext
+ * @typedef {{outputPath: string, format: string, kind: string, status?: string}} TranscodeResult
+ */
+
+/**
  * Contract for transcoder backends (ffmpeg sidecar, GPU node pool, managed
  * service). Implementations receive an already validated job specification.
  */
 export class Transcoder {
+  /** @param {TranscodeJob|any} job @param {TranscodeContext} [context] @returns {Promise<TranscodeResult>} */
   async transcode(job, context) {
     throw createError('MEDIA_TRANSCODER_NOT_IMPLEMENTED', 'Transcoder.transcode() must be implemented', { status: 500 });
   }
@@ -19,6 +26,9 @@ export class Transcoder {
  * without a shell, and every value has already been constrained to an
  * allow-listed enum or a bounded integer, so no caller-supplied string can be
  * interpreted as an option or a shell command.
+ * @param {TranscodeJob|any} job
+ * @param {{inputPath: string, outputPath: string}} paths
+ * @returns {string[]}
  */
 export function buildFfmpegArgs(job, { inputPath, outputPath }) {
   const args = ['-hide_banner', '-loglevel', 'error', '-nostdin', '-y', '-i', inputPath];
@@ -80,6 +90,9 @@ export class FfmpegTranscoder extends Transcoder {
   #logger;
   #workdir;
 
+  /**
+   * @param {{spawnImpl?: any, binary?: string, timeoutMs?: number, maxLogBytes?: number, logger?: {debug?: Function, info?: Function, warn?: Function, error?: Function}, workdir?: string}} [options]
+   */
   constructor({ spawnImpl, binary = 'ffmpeg', timeoutMs = 900_000, maxLogBytes = 64 * 1024, logger = noopLogger, workdir = '/tmp/transcode' } = {}) {
     super();
     if (typeof spawnImpl !== 'function') {
@@ -93,6 +106,7 @@ export class FfmpegTranscoder extends Transcoder {
     this.#workdir = workdir;
   }
 
+  /** @param {TranscodeJob|any} job @param {TranscodeContext} [context] @returns {Promise<TranscodeResult>} */
   async transcode(job, { signal } = {}) {
     if (typeof job.id !== 'string' || !SAFE_JOB_ID.test(job.id)) {
       throw createError('MEDIA_INVALID_JOB_ID', 'job.id must be a filename-safe string before it is used in a filesystem path', { status: 400 });
@@ -147,12 +161,14 @@ export class FfmpegTranscoder extends Transcoder {
 
 /** In-memory transcoder for tests and local development. */
 export class MockTranscoder extends Transcoder {
+  /** @param {{fail?: boolean}} [options] */
   constructor({ fail = false } = {}) {
     super();
     this.fail = fail;
     this.jobs = [];
   }
 
+  /** @param {TranscodeJob|any} job @returns {Promise<TranscodeResult>} */
   async transcode(job) {
     if (this.fail) {
       throw createError('MEDIA_TRANSCODE_FAILED', 'Mock transcoder failed', { status: 502 });

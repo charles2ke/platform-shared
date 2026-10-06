@@ -11,6 +11,7 @@ const SOCIAL_ROLES = createRoleRegistry({
 /**
  * Social wires the full JWT lifecycle: issue -> guard -> rotate -> revoke.
  * Permissions stay out of the token and are resolved from roles at request time.
+ * @param {{jwtSecret: string, profileStore?: any, audience?: string, revocationStore?: InMemoryTokenRevocationStore, reuseEvents?: any[]}} options
  */
 export function createSocialPlatform({ jwtSecret, profileStore, audience = 'social', revocationStore = new InMemoryTokenRevocationStore(), reuseEvents = [] }) {
   const tokenOptions = { secret: jwtSecret, issuer: 'platform-shared', audience };

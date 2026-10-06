@@ -6,6 +6,13 @@ const textEncoder = new TextEncoder();
 // Bounds the work an unauthenticated caller can force per verification.
 const MAX_TOKEN_LENGTH = 8192;
 
+/**
+ * @typedef {Date|string|number} DateInput
+ * @typedef {Record<string, any>} TokenClaims
+ * @typedef {TokenClaims & {sub?: string, roles?: string[], permissions?: string[], iss?: string, aud?: string, iat?: number, exp?: number, nbf?: number, jti?: string, sid?: string, token_use?: string}} TokenPayload
+ * @typedef {{isRevoked?: (payload: TokenPayload) => boolean, revokeToken?: (payload: TokenPayload) => string, revokeSession?: (sessionId: string, options?: {expiresAt?: number}) => unknown, revokeSubject?: (subject: string, options?: {issuedBefore?: DateInput}) => unknown}} TokenRevocationLike
+ */
+
 function base64UrlEncode(value) {
   const buffer = typeof value === 'string' ? Buffer.from(value) : Buffer.from(JSON.stringify(value));
   return buffer.toString('base64url');
@@ -42,6 +49,10 @@ function secondsNow(now = new Date()) {
   return Math.floor(now.getTime() / 1000);
 }
 
+/**
+ * @param {{subject: string, secret: string, roles?: string[], permissions?: string[], claims?: TokenClaims, issuer?: string, audience?: string, ttlSeconds?: number, now?: Date, tokenUse?: string}} options
+ * @returns {string}
+ */
 export function issueToken({ subject, roles = [], permissions = [], claims = {}, secret, issuer, audience, ttlSeconds = 900, now = new Date(), tokenUse = 'access' }) {
   assertSecret(secret);
   if (!subject) {
@@ -68,6 +79,11 @@ export function issueToken({ subject, roles = [], permissions = [], claims = {},
   return `${signingInput}.${sign(signingInput, secret)}`;
 }
 
+/**
+ * @param {any} token
+ * @param {{secret: string, issuer?: string, audience?: string, now?: Date, clockToleranceSeconds?: number, expectedUse?: string, revocationStore?: TokenRevocationLike}} options
+ * @returns {TokenPayload}
+ */
 export function verifyToken(token, { secret, issuer, audience, now = new Date(), clockToleranceSeconds = 0, expectedUse, revocationStore } = {}) {
   assertSecret(secret);
   assertTokenShape(token);
@@ -124,6 +140,10 @@ export function verifyToken(token, { secret, issuer, audience, now = new Date(),
  * Decodes a token without verifying its signature. Use only for logging,
  * debugging, or routing decisions; never for authorization.
  */
+/**
+ * @param {any} token
+ * @returns {{header: Record<string, any>, payload: TokenPayload}}
+ */
 export function decodeToken(token) {
   assertTokenShape(token);
 
@@ -137,6 +157,11 @@ export function decodeToken(token) {
 
 /**
  * Summarizes a verified token payload for session/introspection endpoints.
+ */
+/**
+ * @param {TokenPayload} payload
+ * @param {{now?: DateInput}} [options]
+ * @returns {{subject?: string, tokenId?: string, sessionId?: string, tokenUse?: string, roles: string[], permissions: string[], issuer?: string, audience?: string, issuedAt?: string, expiresAt?: string, expiresInSeconds?: number, expired: boolean}}
  */
 export function describeToken(payload, { now = new Date() } = {}) {
   if (!payload || typeof payload !== 'object') {
@@ -170,6 +195,10 @@ export function describeToken(payload, { now = new Date() } = {}) {
  * Issues an access/refresh pair that share a session id (`sid`) claim so both
  * tokens can be revoked together on logout or refresh-token replay.
  */
+/**
+ * @param {{subject: string, secret: string, roles?: string[], permissions?: string[], claims?: TokenClaims, issuer?: string, audience?: string, accessTokenTtlSeconds?: number, refreshTokenTtlSeconds?: number, now?: Date, sessionId?: string}} options
+ * @returns {{sessionId: string, accessToken: string, refreshToken: string}}
+ */
 export function issueTokenPair({ subject, roles = [], permissions = [], claims = {}, secret, issuer, audience, accessTokenTtlSeconds = 900, refreshTokenTtlSeconds = 2_592_000, now = new Date(), sessionId }) {
   const session = sessionId ?? claims.sid ?? randomUUID();
   const sharedClaims = { ...claims, sid: session };
@@ -180,6 +209,11 @@ export function issueTokenPair({ subject, roles = [], permissions = [], claims =
   };
 }
 
+/**
+ * @param {string} refreshToken
+ * @param {{secret: string, issuer?: string, audience?: string, accessTokenTtlSeconds?: number, now?: Date, clockToleranceSeconds?: number, revocationStore?: TokenRevocationLike}} options
+ * @returns {string}
+ */
 export function refreshAccessToken(refreshToken, options = {}) {
   const payload = verifyToken(refreshToken, { ...options, expectedUse: 'refresh' });
   return issueAccessTokenFromRefreshPayload(payload, options);
@@ -198,6 +232,11 @@ export function refreshAccessToken(refreshToken, options = {}) {
  * verifying, every session for the subject is revoked (unless
  * `revokeSubjectOnReuse` is false), the optional `onReuseDetected` hook runs,
  * and an `AUTH_REFRESH_TOKEN_REUSED` error is thrown.
+ */
+/**
+ * @param {string} refreshToken
+ * @param {{secret: string, issuer?: string, audience?: string, accessTokenTtlSeconds?: number, refreshTokenTtlSeconds?: number, now?: DateInput, clockToleranceSeconds?: number, revocationStore?: TokenRevocationLike, roles?: string[], permissions?: string[], claims?: TokenClaims, sessionId?: string, onReuseDetected?: (event: {subject?: string, sessionId?: string, payload: TokenPayload}) => unknown, revokeSubjectOnReuse?: boolean}} options
+ * @returns {{sessionId: string, accessToken: string, refreshToken: string, rotatedFrom: TokenPayload}}
  */
 export function rotateTokenPair(refreshToken, options = {}) {
   const { revocationStore, roles, permissions, claims, onReuseDetected, revokeSubjectOnReuse = true } = options;
@@ -243,8 +282,8 @@ export function rotateTokenPair(refreshToken, options = {}) {
  * token and the refresh token issued together stop verifying at once. Falls
  * back to single-token revocation for tokens issued without a session id.
  *
- * @param {{sid?: string, jti?: string, exp?: number}} payload A verified token payload.
- * @param {{revocationStore: {revokeSession?: Function, revokeToken: Function}}} options
+ * @param {TokenPayload} payload A verified token payload.
+ * @param {{revocationStore?: TokenRevocationLike}} [options]
  * @returns {{sessionId?: string, tokenId?: string}} What was revoked.
  */
 export function revokeSession(payload, { revocationStore } = {}) {

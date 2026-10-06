@@ -4,3 +4,4 @@ export * from './policy.js';
 export * from './rbac.js';
 export * from './revocation.js';
 export * from './stores.js';
+export * from './throttle.js';

@@ -2,14 +2,20 @@ import { createError } from '../shared/errors.js';
 import { authorize, resolvePrincipal } from './rbac.js';
 
 /**
+ * @typedef {import('./rbac.js').AccessRequirements} PolicyRequirements
+ * @typedef {{actions?: () => string[], requirementsFor?: (action: string) => PolicyRequirements|undefined, enforce: (action: string, principal?: import('./rbac.js').Principal) => import('./rbac.js').Principal|undefined}} AccessPolicy
+ */
+
+/**
  * Builds an access policy that services (profiles, notifications, jobs, queue
  * consumers) can enforce on every call, so RBAC is not limited to HTTP routes.
  *
- * @param {Record<string, {roles?: string[]|string, permissions?: string[]|string, requireAllRoles?: boolean, requireAllPermissions?: boolean}>} actions
+ * @param {any} actions
  *   Requirement map keyed by action name, e.g. `{ 'profile.update': { permissions: ['profile:write'] } }`.
  * @param {{roleRegistry?: object, requirePrincipal?: boolean}} [options]
  *   `roleRegistry` expands roles into permissions before the check.
  *   `requirePrincipal` (default true) rejects calls made without a principal.
+ * @returns {AccessPolicy}
  */
 export function createAccessPolicy(actions = {}, { roleRegistry, requirePrincipal = true } = {}) {
   if (actions === null || typeof actions !== 'object' || Array.isArray(actions)) {
@@ -64,6 +70,10 @@ export function createAccessPolicy(actions = {}, { roleRegistry, requirePrincipa
 /**
  * Normalizes a `policy` service option: accepts a policy built by
  * `createAccessPolicy()`, a plain requirement map, or undefined (no checks).
+ *
+ * @param {any} policy
+ * @param {{roleRegistry?: object}} [options]
+ * @returns {AccessPolicy|undefined}
  */
 export function toAccessPolicy(policy, options) {
   if (policy === undefined || policy === null) {

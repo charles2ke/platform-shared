@@ -6,6 +6,11 @@ import { createResiliencePolicy } from '../shared/resilience.js';
 import { TRANSCODE_STATUS, normalizeTranscodeJob } from './types.js';
 
 /**
+ * @typedef {ReturnType<typeof normalizeTranscodeJob>} MediaTranscodeJob
+ * @typedef {{counter?: Function, histogram?: Function, gauge?: Function}} MediaMetrics
+ */
+
+/**
  * Transcoding service for video, audio, and image assets.
  *
  * Submitting a job is cheap and non-blocking: the validated specification is
@@ -19,6 +24,9 @@ import { TRANSCODE_STATUS, normalizeTranscodeJob } from './types.js';
 export class MediaTranscodingService {
   #inFlight = 0;
 
+  /**
+   * @param {{transcoder?: {transcode: Function}, publisher?: {publish: Function}, logger?: {debug?: Function, info?: Function, warn?: Function, error?: Function}, metrics?: any, policy?: import('../auth/policy.js').AccessPolicy|Record<string, import('../auth/rbac.js').AccessRequirements>, roleRegistry?: object, maxAttempts?: number, maxConcurrency?: number, timeoutMs?: number, deadLetterStore?: {add: Function}, chaos?: any, now?: () => Date}} [options]
+   */
   constructor({
     transcoder,
     publisher,
@@ -81,7 +89,9 @@ export class MediaTranscodingService {
 
   /**
    * Validates and queues a transcoding job on the Kafka topic.
-   * @returns {Promise<{id: string, status: string, job: object}>}
+   * @param {Partial<MediaTranscodeJob>} input
+   * @param {{principal?: import('../auth/rbac.js').Principal}} [options]
+   * @returns {Promise<{id: string, status: string, job: MediaTranscodeJob}>}
    */
   async submit(input, options = {}) {
     this.#enforce('media.transcode.submit', options);
@@ -107,6 +117,10 @@ export class MediaTranscodingService {
    * Runs one job. Used directly for synchronous callers and by the Kafka
    * consumer worker for queued jobs. Failures past `maxAttempts` are
    * dead-lettered instead of being retried forever.
+   */
+  /**
+   * @param {Partial<MediaTranscodeJob>} input
+   * @param {{principal?: import('../auth/rbac.js').Principal, attempts?: number, signal?: AbortSignal}} [options]
    */
   async run(input, options = {}) {
     this.#enforce('media.transcode.run', options);
@@ -162,6 +176,7 @@ export class MediaTranscodingService {
   }
 
   /** Handler for `createKafkaConsumerWorker()`. */
+  /** @param {{principal?: import('../auth/rbac.js').Principal, signal?: AbortSignal}} [options] */
   handler(options = {}) {
     return async (event, context = {}) => {
       const attempts = Number(context.headers?.['retry-attempts']?.toString?.() ?? 0) || 0;

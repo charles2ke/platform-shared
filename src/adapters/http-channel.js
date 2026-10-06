@@ -3,12 +3,19 @@ import { ChannelAdapter } from '../notifications/mock-adapter.js';
 import { DELIVERY_STATUS } from '../notifications/types.js';
 
 /**
+ * @typedef {{ok?: boolean, status?: number, headers?: {get?: (name: string) => string|null}, json?: () => Promise<any>}} HttpResponseLike
+ */
+
+/**
  * Concrete channel adapter that POSTs a rendered notification to an HTTP
  * provider (SendGrid-style transactional APIs, SMS gateways, push relays, or an
  * app's own webhook). Downstream repos usually only need to supply `endpoint`,
  * `headers`, and an optional `transform` for the provider payload shape.
  */
 export class HttpChannelAdapter extends ChannelAdapter {
+  /**
+   * @param {{channel?: string, endpoint?: string, headers?: Record<string, string>, fetchImpl?: any, transform?: any, timeoutMs?: number}} [options]
+   */
   constructor({ channel, endpoint, headers = {}, fetchImpl = globalThis.fetch, transform, timeoutMs } = {}) {
     super({ channel });
     if (typeof endpoint !== 'string' || endpoint.length === 0) {
@@ -28,6 +35,10 @@ export class HttpChannelAdapter extends ChannelAdapter {
     this.timeoutMs = timeoutMs;
   }
 
+  /**
+   * @param {import('../notifications/mock-adapter.js').NotificationMessage} message
+   * @returns {Promise<import('../notifications/mock-adapter.js').ChannelDelivery>}
+   */
   async send(message) {
     const payload = this.transform ? this.transform(message) : message;
     const response = await this.#post(payload);

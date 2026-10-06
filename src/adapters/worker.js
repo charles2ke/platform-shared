@@ -7,8 +7,9 @@ import { noopLogger } from '../shared/logger.js';
  * `runOnce()` from an existing cron/queue trigger, or `start()` in a
  * long-running worker process.
  *
- * @param {object} service A `NotificationService` instance.
- * @param {{intervalMs?: number, logger?: object, principal?: object, onError?: Function, setIntervalImpl?: Function, clearIntervalImpl?: Function}} [options]
+ * @param {any} service A `NotificationService` instance.
+ * @param {{intervalMs?: number, logger?: {debug?: Function, info?: Function, warn?: Function, error?: Function}, principal?: object, onError?: Function, setIntervalImpl?: Function, clearIntervalImpl?: Function}} [options]
+ * @returns {{runOnce: (now?: Date) => Promise<any>, isDispatching: () => boolean, isStarted: () => boolean, start: () => any, stop: () => void}}
  */
 export function createNotificationWorker(service, {
   intervalMs = 60_000,
@@ -84,8 +85,8 @@ export function createNotificationWorker(service, {
  * Records that cannot be scheduled again are put back into the store instead of
  * being lost, and are reported as `failed`.
  *
- * @param {{service: object, store: object, when?: Date, principal?: object}} options
- * @returns {Promise<{replayed: number, notifications: string[], failed: object[]}>}
+ * @param {{service?: {schedule?: (notification: object, when: Date|string|number, options?: object) => Promise<object>}, store?: {drain?: () => Promise<Array<{notification?: {id?: string, [key: string]: any}, [key: string]: any}>>, add?: (record: object) => Promise<object>}, when?: Date|string|number, principal?: object}} options
+ * @returns {Promise<{replayed: number, notifications: string[], failed: Array<{notification?: object, error: import('../shared/errors.js').PlatformError}>}>}
  */
 export async function replayDeadLetters({ service, store, when = new Date(), principal } = {}) {
   if (!service || typeof service.schedule !== 'function') {

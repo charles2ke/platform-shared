@@ -1,5 +1,9 @@
 import { createError } from '../shared/errors.js';
 
+/**
+ * @typedef {{notification?: {id?: string, [key: string]: any}, attempts?: number, reason?: string, channels?: string[], failedAt?: string, [key: string]: any}} DeadLetterRecord
+ */
+
 function notImplemented(method) {
   throw createError('NOTIFICATION_DEAD_LETTER_STORE_NOT_IMPLEMENTED', `DeadLetterStore.${method}() must be implemented`, { status: 500 });
 }
@@ -11,19 +15,23 @@ function notImplemented(method) {
  * Records are `{ notification, attempts, reason, channels?, failedAt }`.
  */
 export class DeadLetterStore {
+  /** @param {DeadLetterRecord} record @returns {Promise<DeadLetterRecord>} */
   async add(record) {
     return notImplemented('add');
   }
 
-  async list() {
+  /** @param {{limit?: number}} [options] @returns {Promise<DeadLetterRecord[]>} */
+  async list(options) {
     return notImplemented('list');
   }
 
+  /** @param {string} notificationId @returns {Promise<number>} */
   async remove(notificationId) {
     return notImplemented('remove');
   }
 
-  async drain() {
+  /** @param {{limit?: number}} [options] @returns {Promise<DeadLetterRecord[]>} */
+  async drain(options) {
     return notImplemented('drain');
   }
 }
@@ -32,6 +40,7 @@ export class DeadLetterStore {
 export class InMemoryDeadLetterQueue extends DeadLetterStore {
   #records = [];
 
+  /** @param {DeadLetterRecord} record @returns {Promise<DeadLetterRecord>} */
   async add(record) {
     if (!record || typeof record !== 'object' || !record.notification) {
       throw createError('NOTIFICATION_INVALID_DEAD_LETTER_RECORD', 'Dead-letter records must include a notification', { status: 500 });
@@ -42,7 +51,8 @@ export class InMemoryDeadLetterQueue extends DeadLetterStore {
     return { ...stored };
   }
 
-  async list() {
+  /** @param {{limit?: number}} [options] @returns {Promise<DeadLetterRecord[]>} */
+  async list(options) {
     return this.#records.map((record) => ({ ...record }));
   }
 
@@ -62,7 +72,8 @@ export class InMemoryDeadLetterQueue extends DeadLetterStore {
   }
 
   /** Returns and clears every record, for replay through `NotificationService`. */
-  async drain() {
+  /** @param {{limit?: number}} [options] @returns {Promise<DeadLetterRecord[]>} */
+  async drain(options) {
     const records = this.#records.map((record) => ({ ...record }));
     this.#records = [];
     return records;

@@ -9,14 +9,17 @@ function notImplemented(method) {
  * provide an object with the same methods) to plug their own persistence layer.
  */
 export class AccountStore {
+  /** @param {{id: string, email?: string, [key: string]: any}} account @returns {Promise<{id: string, email?: string, [key: string]: any}|undefined>} */
   async upsert(account) {
     return notImplemented('upsert');
   }
 
+  /** @param {string|any} id @returns {Promise<{id: string, email?: string, [key: string]: any}|undefined>} */
   async findById(id) {
     return notImplemented('findById');
   }
 
+  /** @param {string|any} email @returns {Promise<{id: string, email?: string, [key: string]: any}|undefined>} */
   async findByEmail(email) {
     return notImplemented('findByEmail');
   }
@@ -26,6 +29,7 @@ export class InMemoryAccountStore extends AccountStore {
   #accounts = new Map();
   #accountIdsByEmail = new Map();
 
+  /** @param {{id: string, email?: string, [key: string]: any}} account @returns {Promise<{id: string, email?: string, [key: string]: any}|undefined>} */
   async upsert(account) {
     const existing = this.#accounts.get(account.id);
     const existingEmail = normalizeEmail(existing?.email);
@@ -42,11 +46,13 @@ export class InMemoryAccountStore extends AccountStore {
     return this.findById(account.id);
   }
 
+  /** @param {string|any} id @returns {Promise<{id: string, email?: string, [key: string]: any}|undefined>} */
   async findById(id) {
     const account = this.#accounts.get(id);
     return account ? { ...account } : undefined;
   }
 
+  /** @param {string|any} email @returns {Promise<{id: string, email?: string, [key: string]: any}|undefined>} */
   async findByEmail(email) {
     const normalized = normalizeEmail(email);
     const accountId = this.#accountIdsByEmail.get(normalized);

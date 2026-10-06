@@ -1,4 +1,7 @@
 export class PlatformError extends Error {
+  /**
+   * @param {{code: string, message: string, status?: number, details?: any, cause?: any}} options
+   */
   constructor({ code, message, status = 500, details, cause }) {
     super(message, { cause });
     this.name = 'PlatformError';
@@ -7,6 +10,7 @@ export class PlatformError extends Error {
     this.details = details;
   }
 
+  /** @returns {{error: {code: string, message: string, status: number, details?: any}}} */
   toJSON() {
     return {
       error: {
@@ -19,6 +23,11 @@ export class PlatformError extends Error {
   }
 }
 
+/**
+ * @param {string} code
+ * @param {string} message
+ * @param {{status?: number, details?: any, cause?: any}} [options]
+ */
 export function createError(code, message, options = {}) {
   return new PlatformError({ code, message, ...options });
 }

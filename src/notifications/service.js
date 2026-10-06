@@ -1,15 +1,30 @@
 import { toAccessPolicy } from '../auth/policy.js';
 import { createError, normalizeError } from '../shared/errors.js';
 import { noopLogger } from '../shared/logger.js';
+import { nextAllowedDeliveryTime } from './quiet-hours.js';
 import { renderTemplate } from './template.js';
-import { CHANNELS, DELIVERY_STATUS } from './types.js';
+import { CHANNELS, DELIVERY_STATUS, DELIVERY_STRATEGY } from './types.js';
 
 // Precomputed once: channel validation runs on every send and every retry.
 const SUPPORTED_CHANNELS = new Set(Object.values(CHANNELS));
+const SUPPORTED_STRATEGIES = new Set(Object.values(DELIVERY_STRATEGY));
+
+/**
+ * @typedef {Date|string|number} DateInput
+ * @typedef {import('./mock-adapter.js').NotificationMessage} ServiceNotificationMessage
+ * @typedef {import('./mock-adapter.js').ChannelDelivery} ServiceChannelDelivery
+ * @typedef {{notification: ServiceNotificationMessage, scheduledFor: string, attempts?: number, scheduledAt?: number}} ScheduledNotification
+ * @typedef {{notificationId?: string, status: string, strategy?: string, deliveries?: ServiceChannelDelivery[], scheduledFor?: string, notification?: ServiceNotificationMessage, deferred?: boolean}} DeliveryResult
+ * @typedef {{enqueue?: (notification: ServiceNotificationMessage, scheduledFor: Date, attempts?: number) => Promise<any>, dequeueDue?: (now: Date) => Promise<any>, requeue?: (notification: ServiceNotificationMessage, scheduledFor: Date, attempts: number) => Promise<any>, cancel?: (notificationId: string) => Promise<any>, countPending?: (now?: Date) => Promise<any>, list?: () => Promise<any>}} NotificationSchedulerLike
+ * @typedef {{add: (record: object) => Promise<any>}} DeadLetterStoreLike
+ */
 
 export class NotificationService {
   #scheduled = [];
 
+  /**
+   * @param {{adapters?: Record<string, {send: (message: ServiceNotificationMessage) => Promise<ServiceChannelDelivery>}>, logger?: {debug?: Function, info?: Function, warn?: Function, error?: Function}, scheduler?: NotificationSchedulerLike, maxScheduleAttempts?: number, retryDelayMs?: number, retryBackoffFactor?: number, maxRetryDelayMs?: number, onDeadLetter?: any, deadLetterStore?: DeadLetterStoreLike|any, retryPartialFailures?: boolean, policy?: import('../auth/policy.js').AccessPolicy|Record<string, import('../auth/rbac.js').AccessRequirements>, roleRegistry?: object}} [options]
+   */
   constructor({ adapters = {}, logger = noopLogger, scheduler, maxScheduleAttempts = 3, retryDelayMs = 60_000, retryBackoffFactor = 1, maxRetryDelayMs, onDeadLetter, deadLetterStore, retryPartialFailures = true, policy, roleRegistry } = {}) {
     this.adapters = adapters;
     this.logger = logger;
@@ -49,6 +64,7 @@ export class NotificationService {
   }
 
   /** Delay in milliseconds before the retry that follows `attempts` failures. */
+  /** @param {number} attempts @returns {number} */
   retryDelayFor(attempts) {
     const normalizedAttempts = Number.isFinite(attempts) ? Math.max(1, Math.floor(attempts)) : 1;
     const exponent = normalizedAttempts - 1;
@@ -56,17 +72,36 @@ export class NotificationService {
     return this.maxRetryDelayMs === undefined ? delay : Math.min(delay, this.maxRetryDelayMs);
   }
 
+  /**
+   * Sends now, unless `notification.quietHours` is set and `options.now`
+   * (default: current time) falls inside it. In that case the notification is
+   * queued for the end of quiet hours and a `pending` result with
+   * `deferred: true` is returned. Set `notification.bypassQuietHours` for
+   * urgent messages.
+   */
+  /**
+   * @param {ServiceNotificationMessage} notification
+   * @param {{now?: DateInput, principal?: import('../auth/rbac.js').Principal}} [options]
+   * @returns {Promise<DeliveryResult>}
+   */
   async send(notification, options = {}) {
     this.#enforce('notification.send', options);
-    return this.#deliver(notification);
+    const validated = validateNotification(notification);
+    const deferUntil = quietHoursDeferral(notification, options.now ?? new Date());
+    if (deferUntil) {
+      const pending = await this.#enqueue(notification, deferUntil);
+      return { ...pending, deferred: true };
+    }
+    return this.#deliver(notification, validated);
   }
 
   /** Delivery without a policy check, used by already-authorized dispatch runs. */
-  async #deliver(notification) {
-    const channels = normalizeChannels(notification);
-    if (channels.length === 0) {
-      throw createError('NOTIFICATION_CHANNEL_REQUIRED', 'At least one notification channel is required', { status: 400 });
-    }
+  /**
+   * @param {ServiceNotificationMessage} notification
+   * @returns {Promise<DeliveryResult>}
+   */
+  async #deliver(notification, validated = validateNotification(notification)) {
+    const { channels, strategy } = validated;
 
     const rendered = {
       ...notification,
@@ -83,7 +118,11 @@ export class NotificationService {
       }
 
       try {
-        deliveries.push(await adapter.send({ ...rendered, channel }));
+        const delivery = await adapter.send({ ...rendered, channel });
+        deliveries.push(delivery);
+        if (strategy === DELIVERY_STRATEGY.FALLBACK && delivery?.status !== DELIVERY_STATUS.FAILED) {
+          break;
+        }
       } catch (error) {
         const normalized = normalizeError(error, 'NOTIFICATION_DELIVERY_FAILED');
         this.logger.warn('Notification delivery failed', { channel, error: normalized });
@@ -92,17 +131,40 @@ export class NotificationService {
     }
 
     const failedCount = deliveries.filter((delivery) => delivery.status === DELIVERY_STATUS.FAILED).length;
+    let status;
+    if (failedCount === 0) {
+      status = DELIVERY_STATUS.SENT;
+    } else if (failedCount === deliveries.length) {
+      status = DELIVERY_STATUS.FAILED;
+    } else {
+      // A fallback chain succeeds as soon as any channel delivers.
+      status = strategy === DELIVERY_STRATEGY.FALLBACK ? DELIVERY_STATUS.SENT : DELIVERY_STATUS.PARTIAL;
+    }
     return {
       notificationId: notification.id,
-      status: failedCount === 0 ? DELIVERY_STATUS.SENT : failedCount === deliveries.length ? DELIVERY_STATUS.FAILED : DELIVERY_STATUS.PARTIAL,
+      status,
+      strategy,
       deliveries
     };
   }
 
+  /**
+   * Queues a notification for `when`. If `notification.quietHours` is set and
+   * `when` falls inside it, delivery is shifted to the end of quiet hours.
+   */
+  /**
+   * @param {ServiceNotificationMessage} notification
+   * @param {DateInput} when
+   * @param {{principal?: import('../auth/rbac.js').Principal}} [options]
+   * @returns {Promise<DeliveryResult>}
+   */
   async schedule(notification, when, options = {}) {
     this.#enforce('notification.schedule', options);
-    const scheduledFor = normalizeScheduleDate(when);
+    const requested = normalizeScheduleDate(when);
+    return this.#enqueue(notification, quietHoursDeferral(notification, requested) ?? requested);
+  }
 
+  async #enqueue(notification, scheduledFor) {
     if (this.scheduler) {
       if (typeof this.scheduler.enqueue !== 'function') {
         throw createError('NOTIFICATION_SCHEDULE_NOT_SUPPORTED', 'Injected scheduler must implement enqueue() for schedule()', { status: 500 });
@@ -121,6 +183,10 @@ export class NotificationService {
   }
 
   /** Lists pending scheduled entries from the in-memory queue or injected scheduler. */
+  /**
+   * @param {{principal?: import('../auth/rbac.js').Principal}} [options]
+   * @returns {Promise<ScheduledNotification[]>}
+   */
   async listScheduled(options = {}) {
     this.#enforce('notification.list', options);
     if (!this.scheduler) {
@@ -142,6 +208,7 @@ export class NotificationService {
   /**
    * Cancels every pending scheduled entry for a notification id, for example
    * when a trip is cancelled or a workout is completed early.
+   * @param {{principal?: import('../auth/rbac.js').Principal}} [options]
    * @returns {Promise<{notificationId: string, cancelled: number}>}
    */
   async cancelScheduled(notificationId, options = {}) {
@@ -171,6 +238,9 @@ export class NotificationService {
     throw createError('NOTIFICATION_INVALID_SCHEDULER_RESPONSE', 'scheduler.cancel() must return a boolean or a non-negative integer', { status: 500 });
   }
 
+  /**
+   * @param {{now?: DateInput, principal?: import('../auth/rbac.js').Principal}} [options]
+   */
   async dispatchScheduled({ now = new Date(), principal } = {}) {
     this.#enforce('notification.dispatch', { principal });
     const nowDate = normalizeScheduleDate(now, { code: 'NOTIFICATION_INVALID_DISPATCH_TIME', message: 'Dispatch time must be a valid date value' });
@@ -390,6 +460,32 @@ function normalizeChannels(notification) {
   }
 
   return [...new Set(channels)];
+}
+
+function validateNotification(notification) {
+  const channels = normalizeChannels(notification);
+  if (channels.length === 0) {
+    throw createError('NOTIFICATION_CHANNEL_REQUIRED', 'At least one notification channel is required', { status: 400 });
+  }
+  return { channels, strategy: normalizeStrategy(notification) };
+}
+
+function normalizeStrategy(notification) {
+  const strategy = notification.strategy ?? DELIVERY_STRATEGY.ALL;
+  if (!SUPPORTED_STRATEGIES.has(strategy)) {
+    throw createError('NOTIFICATION_INVALID_STRATEGY', `Unsupported delivery strategy: ${String(strategy)}`, { status: 400, details: { strategy } });
+  }
+  return strategy;
+}
+
+/** Returns the deferred delivery time when `at` is inside quiet hours. */
+function quietHoursDeferral(notification, at) {
+  if (!notification?.quietHours || notification.bypassQuietHours === true) {
+    return undefined;
+  }
+  const date = normalizeScheduleDate(at);
+  const allowed = nextAllowedDeliveryTime(date, notification.quietHours);
+  return allowed.getTime() > date.getTime() ? allowed : undefined;
 }
 
 function normalizeScheduleDate(value, { code = 'NOTIFICATION_INVALID_SCHEDULE_TIME', message = 'Scheduled notification time must be a valid date value', status = 400 } = {}) {

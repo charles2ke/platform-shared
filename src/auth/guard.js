@@ -3,6 +3,15 @@ import { noopLogger } from '../shared/logger.js';
 import { verifyToken } from './jwt.js';
 import { authorize, resolvePrincipal } from './rbac.js';
 
+/**
+ * @typedef {{headers?: any}} AuthRequest
+ * @typedef {import('./jwt.js').TokenRevocationLike} GuardTokenRevocationLike
+ */
+
+/**
+ * @param {AuthRequest} request
+ * @returns {string|undefined}
+ */
 export function getBearerToken(request) {
   const headers = request?.headers;
   const authorization = headers?.authorization ?? headers?.Authorization ?? headers?.get?.('authorization');
@@ -20,6 +29,10 @@ export function getBearerToken(request) {
   return /^Bearer$/i.test(scheme) && token ? token : undefined;
 }
 
+/**
+ * @param {{secret: string, issuer?: string, audience?: string, logger?: {debug?: Function, info?: Function, warn?: Function, error?: Function}, revocationStore?: GuardTokenRevocationLike, roleRegistry?: any, clockToleranceSeconds?: number}} options
+ * @returns {(request: AuthRequest, requirements?: any) => import('./rbac.js').Principal}
+ */
 export function createAuthGuard({ secret, issuer, audience, logger = noopLogger, revocationStore, roleRegistry, clockToleranceSeconds = 0 } = {}) {
   return function guard(request, requirements = {}) {
     const token = getBearerToken(request);

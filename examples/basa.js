@@ -20,6 +20,7 @@ const BASA_PROFILE_POLICY = createAccessPolicy({
 /**
  * Basa shows the full stack: RBAC-guarded order operations, profile CRUD, and
  * order notifications that can be sent immediately or scheduled with retries.
+ * @param {{jwtSecret: string, profileStore?: any, adapters?: any, revocationStore?: InMemoryTokenRevocationStore}} options
  */
 export function createBasaIntegration({ jwtSecret, profileStore, adapters, revocationStore = new InMemoryTokenRevocationStore() }) {
   const scheduler = new InMemoryNotificationScheduler();

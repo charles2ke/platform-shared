@@ -15,6 +15,15 @@ export const CIRCUIT_STATE = Object.freeze({
 });
 
 /**
+ * @typedef {{timeoutMs?: number, name?: string, setTimeoutImpl?: any, clearTimeoutImpl?: any}} TimeoutOptions
+ * @typedef {{baseDelayMs?: number, factor?: number, maxDelayMs?: number, jitter?: boolean, random?: () => number}} BackoffOptions
+ * @typedef {BackoffOptions & {retries?: number, timeoutMs?: number, name?: string, shouldRetry?: (error: import('./errors.js').PlatformError, attempt: number) => boolean, onRetry?: (info: {attempt: number, delayMs: number, error: import('./errors.js').PlatformError, name: string}) => unknown, sleep?: (ms: number) => Promise<any>}} RetryOptions
+ * @typedef {{failureThreshold?: number, successThreshold?: number, resetTimeoutMs?: number, name?: string, now?: () => number, onStateChange?: (event: {name: string, from: string, to: string}) => unknown}} CircuitBreakerOptions
+ * @typedef {{limit?: number, queueLimit?: number, name?: string}} BulkheadOptions
+ * @typedef {{name?: string, timeoutMs?: number, retry?: RetryOptions, breaker?: CircuitBreakerOptions|null, bulkhead?: BulkheadOptions|null, logger?: {debug?: Function, info?: Function, warn?: Function, error?: Function}}} ResiliencePolicyOptions
+ */
+
+/**
  * Rejects with `OPERATION_TIMEOUT` when `operation` outlives `timeoutMs`.
  *
  * `operation` is invoked with an `AbortSignal` so it can propagate cancellation
@@ -22,6 +31,9 @@ export const CIRCUIT_STATE = Object.freeze({
  * aborted and the wrapper still waits for `operation` to settle before
  * returning, so a caller such as `withRetry` never starts a new attempt while
  * the previous one is still running.
+ * @param {(signal: AbortSignal) => any|Promise<any>} operation
+ * @param {TimeoutOptions} [options]
+ * @returns {Promise<any>}
  */
 export async function withTimeout(operation, { timeoutMs, name = 'operation', setTimeoutImpl = setTimeout, clearTimeoutImpl = clearTimeout } = {}) {
   if (typeof operation !== 'function') {
@@ -66,6 +78,11 @@ export async function withTimeout(operation, { timeoutMs, name = 'operation', se
 }
 
 /** Full-jitter exponential backoff delay for the retry that follows `attempt` failures. */
+/**
+ * @param {number} attempt
+ * @param {BackoffOptions} [options]
+ * @returns {number}
+ */
 export function backoffDelay(attempt, { baseDelayMs = 100, factor = 2, maxDelayMs = 30_000, jitter = true, random = Math.random } = {}) {
   const exponent = Math.max(0, Math.floor(attempt) - 1);
   const raw = Math.min(maxDelayMs, Math.round(baseDelayMs * factor ** exponent));
@@ -75,6 +92,9 @@ export function backoffDelay(attempt, { baseDelayMs = 100, factor = 2, maxDelayM
 /**
  * Retries `operation` while `shouldRetry` allows it, using jittered backoff.
  * Retries are bounded so a failing dependency degrades instead of stalling.
+ * @param {(signal: AbortSignal) => any|Promise<any>} operation
+ * @param {RetryOptions} [options]
+ * @returns {Promise<any>}
  */
 export async function withRetry(operation, {
   retries = 3,
@@ -114,6 +134,7 @@ export async function withRetry(operation, {
  * Circuit breaker that stops calling a dependency after repeated failures and
  * probes it again after `resetTimeoutMs`, so one sick dependency cannot exhaust
  * the pod's connections or queue depth.
+ * @param {CircuitBreakerOptions} [options]
  */
 export function createCircuitBreaker({
   failureThreshold = 5,
@@ -204,6 +225,7 @@ export function createCircuitBreaker({
  * Bulkhead: caps in-flight work and the queue in front of it so a slow
  * dependency creates backpressure instead of unbounded memory growth. This is
  * what keeps a pod's memory flat while the HPA adds replicas.
+ * @param {BulkheadOptions} [options]
  */
 export function createBulkhead({ limit = 10, queueLimit = 1000, name = 'bulkhead' } = {}) {
   if (!Number.isInteger(limit) || limit < 1) {
@@ -259,6 +281,7 @@ export function createBulkhead({ limit = 10, queueLimit = 1000, name = 'bulkhead
 /**
  * Composes timeout + retry + circuit breaker + bulkhead into one guarded call
  * wrapper for a dependency (Kafka broker, Mongo replica set, Redis, provider).
+ * @param {ResiliencePolicyOptions} [options]
  */
 export function createResiliencePolicy({ name = 'dependency', timeoutMs, retry = {}, breaker, bulkhead, logger = noopLogger } = {}) {
   const circuit = breaker === null ? undefined : createCircuitBreaker({ name, ...breaker });
