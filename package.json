@@ -93,7 +93,7 @@
     "audit": "npm audit --omit=dev --audit-level=high",
     "types": "tsc -p tsconfig.types.json",
     "check:types": "npm run types && tsc -p tsconfig.check.json",
-    "prepare": "npm run types"
+    "prepare": "node -e \"try { require.resolve('typescript'); } catch { process.exit(0); } require('node:child_process').execSync('npm run types', { stdio: 'inherit' });\""
   },
   "engines": {
     "node": ">=22"
