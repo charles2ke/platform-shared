@@ -45,7 +45,7 @@ examples/          Integration stubs for social, travel, workout, and basa
 - Normalizes display names, email addresses, locale/timezone defaults, and status.
 - Provides validation helpers and `ProfileService` over the replaceable `ProfileStore` interface.
 - Ships `InMemoryProfileStore` for tests, prototypes, and local development.
-- `softDelete(id)` marks a profile `deleted` with a `deletedAt` timestamp (enforces `profile.delete`); `restore(id, { status })` brings it back (default `active`; enforces `profile.restore`, or `profile.delete` when no `profile.restore` requirement is configured). `delete(id)` still removes permanently.
+- `softDelete(id)` marks a profile `deleted` with a `deletedAt` timestamp (enforces `profile.delete`); `restore(id, { status })` brings it back (default `active`; enforces `profile.restore`, or `profile.delete` when no `profile.restore` requirement is configured). `delete(id)` still removes permanently. `update()` applies the same rules when a `status` change moves a profile into or out of `deleted` (extra policy check and `deletedAt` bookkeeping), so `profile.update` alone cannot soft-delete or restore.
 - `search({ query, status, includeDeleted, limit, cursor })` matches `query` case-insensitively against display name and email, hides soft-deleted profiles by default, and returns `{ items, nextCursor }` ordered by `id` (enforces `profile.search`, or `profile.list` when not configured). Stores may implement `search()` natively (`InMemoryProfileStore`, `MongoProfileStore`, and `CachedProfileStore` do); otherwise the service filters `store.list()`, which is only complete if `list()` returns every profile.
 
 ### Notifications
